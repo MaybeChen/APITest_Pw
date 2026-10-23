@@ -140,6 +140,10 @@ test("creates a custom environment using the form without overwriting an existin
         "\n" +
         String.raw`^internal\.example\.test$`,
     );
+  await form.getByLabel("保留请求的域名白名单").fill("api.example.test");
+  await form
+    .getByLabel("保留请求的域名正则")
+    .fill(String.raw`(^|\.)huawei\.com$`);
   await form.getByLabel("忽略此环境的 HTTPS 证书错误").check();
   await form.getByRole("button", { name: "保存新环境" }).click();
   await expect(
@@ -165,6 +169,10 @@ test("creates a custom environment using the form without overwriting an existin
       hostnameRegex: String.raw`^internal\.example\.test$`,
       protocol: "https:",
     },
+  ]);
+  expect(saved.recordingRequestDomains).toEqual([
+    "api.example.test",
+    { hostnameRegex: String.raw`(^|\.)huawei\.com$` },
   ]);
   expect(saved.allowWrites).toBe(false);
   expect(saved.allowHighRisk).toBe(false);

@@ -216,6 +216,24 @@ export const allowedOriginSchema = z.union([
     port: z.number().int().min(1).max(65535).optional(),
   }),
 ]);
+export const requestDomainRuleSchema = z.union([
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(253)
+    .refine(
+      (value) =>
+        value
+          .split(".")
+          .every((label) =>
+            /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label),
+          ),
+      "Request allowlist requires a hostname without protocol, port or path",
+    )
+    .transform((value) => value.toLowerCase()),
+  z.object({ hostnameRegex: hostnamePatternSchema }),
+]);
 export const environmentSchema = z.object({
   id,
   baseURL: z.string().url(),
@@ -223,6 +241,7 @@ export const environmentSchema = z.object({
   allowWrites: z.boolean(),
   allowHighRisk: z.boolean().default(false),
   ignoreHTTPSErrors: z.boolean().default(false),
+  recordingRequestDomains: z.array(requestDomainRuleSchema).optional(),
 });
 export type Recording = z.infer<typeof recordingSchema>;
 export type Asset = z.infer<typeof assetSchema>;

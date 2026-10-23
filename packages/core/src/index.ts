@@ -95,6 +95,22 @@ function hostnameMatches(pattern: string, hostname: string) {
   }
   return compiled.matcher(hostname).find();
 }
+export function shouldCaptureRequest(
+  url: string,
+  resourceType: string,
+  env: Environment,
+): boolean {
+  if (!["fetch", "xhr"].includes(resourceType)) return false;
+  const parsed = new URL(url);
+  if (!["http:", "https:"].includes(parsed.protocol)) return false;
+  const rules = env.recordingRequestDomains;
+  if (!rules?.length) return true;
+  return rules.some((rule) =>
+    typeof rule === "string"
+      ? parsed.hostname.toLowerCase() === rule.toLowerCase()
+      : hostnameMatches(rule.hostnameRegex, parsed.hostname),
+  );
+}
 export function allowedURL(url: string, env: Environment) {
   const u = new URL(url);
   if (

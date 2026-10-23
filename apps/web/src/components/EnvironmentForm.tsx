@@ -12,6 +12,8 @@ export function EnvironmentForm({
   const [baseURL, setBaseURL] = useState("");
   const [origins, setOrigins] = useState("");
   const [hostPatterns, setHostPatterns] = useState("");
+  const [requestDomains, setRequestDomains] = useState("");
+  const [requestPatterns, setRequestPatterns] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
   const [allowHighRisk, setAllowHighRisk] = useState(false);
   const [ignoreHTTPSErrors, setIgnoreHTTPSErrors] = useState(false);
@@ -49,6 +51,14 @@ export function EnvironmentForm({
                   );
                 return url.origin;
               });
+            const recordingRequestDomains = [
+              ...requestDomains.split(/[\s,，]+/).filter(Boolean),
+              ...requestPatterns
+                .split(/\r?\n/)
+                .map((pattern) => pattern.trim())
+                .filter(Boolean)
+                .map((hostnameRegex) => ({ hostnameRegex })),
+            ];
             await onCreate({
               id: id.trim(),
               baseURL: base.href,
@@ -63,6 +73,9 @@ export function EnvironmentForm({
                     protocol: "https:" as const,
                   })),
               ],
+              ...(recordingRequestDomains.length
+                ? { recordingRequestDomains }
+                : {}),
               allowWrites,
               allowHighRisk,
               ignoreHTTPSErrors,
@@ -125,6 +138,29 @@ export function EnvironmentForm({
         <p>
           正则只匹配域名，不包含协议、路径或 / 分隔符；默认仅允许 HTTPS。使用
           (^|\.)huawei\.com$ 可包含根域名及其子域名。
+        </p>
+        <h3>录制请求白名单</h3>
+        <label>
+          保留请求的域名白名单
+          <textarea
+            name="recordingRequestDomains"
+            value={requestDomains}
+            onChange={(e) => setRequestDomains(e.target.value)}
+            placeholder="例如 api.example.com；每行一个域名，不含协议、端口或路径"
+          />
+        </label>
+        <label>
+          保留请求的域名正则
+          <textarea
+            name="recordingRequestPatterns"
+            value={requestPatterns}
+            onChange={(e) => setRequestPatterns(e.target.value)}
+            placeholder={"例如 (^|\\.)huawei\\.com$；每行一条"}
+          />
+        </label>
+        <p>
+          两项都留空时保留所有 Fetch/XHR
+          请求。填写后仅保存匹配域名的请求，不阻止其他请求发送，不影响页面加载和登录跳转。域名需同时符合上方的访问规则。
         </p>
         <label>
           <span>

@@ -6,6 +6,7 @@ import {
   resolve,
   atPath,
   allowedURL,
+  shouldCaptureRequest,
 } from "../../packages/core/src/index";
 import { demoArtifacts, demoEnv } from "../../apps/server/src/demo";
 import { analyze } from "../../packages/recorder/src/index";
@@ -271,4 +272,80 @@ describe("hostname regex allowlist rules", () => {
         }).success,
       ).toBe(false),
   );
+});
+
+describe("recording request domain whitelist", () => {
+  it("retains the previous Fetch/XHR behavior when unset or empty", () => {
+    for (const env of [demoEnv, { ...demoEnv, recordingRequestDomains: [] }]) {
+      expect(
+        shouldCaptureRequest("https://any.example.test/api", "fetch", env),
+      ).toBe(true);
+      expect(
+        shouldCaptureRequest("https://any.example.test/api", "xhr", env),
+      ).toBe(true);
+      expect(
+        shouldCaptureRequest("https://any.example.test/page", "document", env),
+      ).toBe(false);
+      expect(shouldCaptureRequest("data:text/plain,test", "fetch", env)).toBe(
+        false,
+      );
+    }
+  });
+  const env = environmentSchema.parse({
+    ...demoEnv,
+    recordingRequestDomains: [
+      "API.EXAMPLE.TEST",
+      { hostnameRegex: String.raw`(^|\.)huawei\.com$` },
+    ],
+  });
+  it.each([
+    "https://api.example.test:38443/orders",
+    "http://api.example.test/orders",
+    "https://astr-lab.gts.huawei.com/wiseoffice",
+    "https://huawei.com/api",
+  ])("retains matching request %s", (url) =>
+    expect(shouldCaptureRequest(url, "fetch", env)).toBe(true),
+  );
+  it.each([
+    "https://other.example.test/api",
+    "https://fakehuawei.com/api",
+    "https://huawei.com.evil.test/api",
+    "https://other.test/api.example.test",
+    "https://other.test/?next=huawei.com",
+  ])("does not retain nonmatching request %s", (url) =>
+    expect(shouldCaptureRequest(url, "xhr", env)).toBe(false),
+  );
+  it.each([
+    "https://api.example.test",
+    "api.example.test:443",
+    "api.example.test/path",
+    "*.example.test",
+  ])("rejects non-hostname entry %s", (entry) =>
+    expect(
+      environmentSchema.safeParse({
+        ...demoEnv,
+        recordingRequestDomains: [entry],
+      }).success,
+    ).toBe(false),
+  );
+  it("rejects invalid regex and leaves browser navigation permission independent", () => {
+    expect(
+      environmentSchema.safeParse({
+        ...demoEnv,
+        recordingRequestDomains: [{ hostnameRegex: "[" }],
+      }).success,
+    ).toBe(false);
+    const recordingOnly = {
+      ...demoEnv,
+      recordingRequestDomains: ["localhost"],
+    };
+    expect(() => allowedURL(demoEnv.baseURL, recordingOnly)).not.toThrow();
+    expect(
+      shouldCaptureRequest(
+        demoEnv.baseURL + "/api/orders",
+        "fetch",
+        recordingOnly,
+      ),
+    ).toBe(false);
+  });
 });

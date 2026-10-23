@@ -11,7 +11,11 @@ import type {
   Environment,
   Asset,
 } from "../../contracts/src/index.js";
-import { allowedURL, redact } from "../../core/src/index.js";
+import {
+  allowedURL,
+  redact,
+  shouldCaptureRequest,
+} from "../../core/src/index.js";
 export class Recorder {
   browser?: Browser;
   context?: BrowserContext;
@@ -110,10 +114,7 @@ export class Recorder {
     });
     const ids = new Map<Request, string>();
     this.context.on("request", (req) => {
-      if (
-        !["fetch", "xhr"].includes(req.resourceType()) ||
-        !/^https?:\/\//i.test(req.url())
-      )
+      if (!shouldCaptureRequest(req.url(), req.resourceType(), this.env))
         return;
       if (this.recording.requests.length >= 5000) return;
       const rid = randomUUID();

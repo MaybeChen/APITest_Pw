@@ -222,3 +222,57 @@ it("classifies 401 as auth error and reports cleanup failure explicitly", async 
     await demo.close();
   }
 });
+
+it("captures only whitelisted request hosts while allowing other browser requests to complete", async () => {
+  const { createServer } = await import("node:http");
+  const seen: string[] = [];
+  let port = 0;
+  const server = createServer((req, res) => {
+    seen.push(req.url ?? "");
+    const body =
+      req.url === "/"
+        ? `<html><body><script>Promise.all([fetch('http://localhost:${port}/api/retained').then(r=>r.json()),fetch('/api/excluded').then(r=>r.json())]).then(()=>document.body.dataset.done='true')</script></body></html>`
+        : '{"ok":true}';
+    res.writeHead(200, {
+      "content-type": req.url === "/" ? "text/html" : "application/json",
+      "content-length": Buffer.byteLength(body),
+      "access-control-allow-origin": "*",
+    });
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  port = (server.address() as { port: number }).port;
+  const baseURL = `http://127.0.0.1:${port}`;
+  const env = {
+    ...demoEnv,
+    baseURL,
+    allowedOrigins: [baseURL, `http://localhost:${port}`],
+    recordingRequestDomains: ["localhost"],
+  };
+  const recorder = new Recorder(
+    {
+      caseName: "请求域名过滤",
+      scenario: "只保存 localhost 的请求",
+      target: baseURL,
+    },
+    env,
+  );
+  try {
+    const page = await recorder.start(true);
+    await page.waitForFunction(() => document.body.dataset.done === "true");
+    const recording = await recorder.stop();
+    expect(seen).toContain("/api/excluded");
+    expect(seen).toContain("/api/retained");
+    expect(recording.requests).toHaveLength(1);
+    expect(new URL(recording.requests[0].url).hostname).toBe("localhost");
+    expect(recording.requests[0].status).toBe(200);
+    expect(recording.operations.some((o) => o.type === "navigation")).toBe(
+      true,
+    );
+  } finally {
+    await recorder.stop();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
