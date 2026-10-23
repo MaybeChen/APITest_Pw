@@ -1,3 +1,4 @@
+import { schedule } from "./scheduler.js";
 import { existsSync } from "node:fs";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { randomUUID } from "node:crypto";
@@ -18,6 +19,8 @@ import {
   redact,
   resolve,
   validate,
+  setAtPath,
+  valueKind,
 } from "../../core/src/index.js";
 export async function uiAuthenticate(
   context: BrowserContext,
@@ -201,7 +204,9 @@ export async function run(
           const value = resolve(b, vars, auth);
           if (value !== undefined) headers[k] = String(value);
         }
-        const body = step.body ? resolve(step.body, vars, auth) : undefined;
+        let body = step.body ? resolve(step.body, vars, auth) : undefined;
+        for (const [path, binding] of Object.entries(step.bodyBindings ?? {}))
+          body = setAtPath(body, path, resolve(binding, vars, auth));
         result.request = redact({
           url: url.href,
           method: a.method,
@@ -271,6 +276,11 @@ export async function run(
             const value = atPath(data, path);
             if (value === undefined)
               throw new Error(`Extraction missing: ${name}`);
+            if (
+              step.extractTypes?.[name] &&
+              valueKind(value) !== step.extractTypes[name]
+            )
+              throw new Error(`Extraction type mismatch: ${name}`);
             vars[name] = value;
             if (step.ownsResource && name === step.resourceVariable)
               fixtures.register(value, name);
@@ -309,10 +319,18 @@ export async function run(
       }
     };
     const steps = ordered(p.steps);
-    for (const step of steps.filter((s) => s.phase !== "CLEANUP"))
-      await execute(step);
-    for (const step of steps.filter((s) => s.phase === "CLEANUP"))
-      await execute(step);
+    try {
+      await schedule(
+        steps.filter((s) => s.phase !== "CLEANUP"),
+        assets,
+        p.execution?.maxConcurrency ?? 1,
+        execute,
+        !authProfile.reauthenticateReads,
+      );
+    } finally {
+      for (const step of steps.filter((s) => s.phase === "CLEANUP"))
+        await execute(step);
+    }
   } catch (e) {
     report.auth = { status: "FAILED", error: String(redact(String(e))) };
   } finally {

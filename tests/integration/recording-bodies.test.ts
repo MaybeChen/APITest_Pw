@@ -115,3 +115,55 @@ it("captures bounded JSON once per response and explains missing, empty and over
     );
   }
 });
+
+it("links before/after DOM context to requests without saving input defaults", async () => {
+  const server = createServer((req, res) => {
+    const body =
+      req.url === "/"
+        ? "<html><body><main><h1>Orders</h1><textarea>private-default-value</textarea><input type=\"password\" value=\"private-password\"><button onclick=\"fetch('/api/orders').then(()=>document.querySelector('h1').textContent='Loaded')\">Load orders</button></main></body></html>"
+        : JSON.stringify({ items: [] });
+    res.writeHead(200, {
+      "content-type": req.url === "/" ? "text/html" : "application/json",
+      "content-length": Buffer.byteLength(body),
+    });
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseURL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const recorder = new Recorder(
+    { caseName: "context", scenario: "load", target: baseURL },
+    { ...demoEnv, baseURL, allowedOrigins: [baseURL] },
+  );
+  try {
+    const page = await recorder.start(true);
+    await page.getByRole("button", { name: "Load orders" }).click();
+    await page.waitForFunction(
+      () => document.querySelector("h1")?.textContent === "Loaded",
+    );
+    await page.waitForTimeout(350);
+    const recording = await recorder.stop();
+    const request = recording.requests.find((r) =>
+      r.url.endsWith("/api/orders"),
+    )!;
+    expect(request.contextSnapshotRefs?.length).toBeGreaterThan(0);
+    const snapshots = recording.contextSnapshots!.filter((s) =>
+      request.contextSnapshotRefs?.includes(s.id),
+    );
+    expect(
+      snapshots.some(
+        (s) => s.phase === "BEFORE" && s.headings.includes("Orders"),
+      ),
+    ).toBe(true);
+    expect(
+      snapshots.some(
+        (s) => s.phase === "AFTER" && s.headings.includes("Loaded"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(recording)).not.toMatch(
+      /private-default-value|private-password/,
+    );
+  } finally {
+    await recorder.stop();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

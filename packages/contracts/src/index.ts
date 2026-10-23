@@ -8,9 +8,22 @@ export const evidence = z.object({
   reason: z.string(),
   confirmed: z.boolean().default(false),
 });
+export const valueType = z.enum([
+  "string",
+  "number",
+  "boolean",
+  "object",
+  "array",
+  "null",
+]);
 export const binding = z.discriminatedUnion("source", [
   z.object({ source: z.literal("STATIC"), value: z.unknown() }),
-  z.object({ source: z.literal("RESPONSE_VARIABLE"), name: id }),
+  z.object({
+    source: z.literal("RESPONSE_VARIABLE"),
+    name: id,
+    fromStep: id.optional(),
+    expectedType: valueType.optional(),
+  }),
   z.object({ source: z.literal("ENVIRONMENT_VARIABLE"), name: id }),
   z.object({
     source: z.literal("RUNTIME_GENERATED"),
@@ -56,6 +69,7 @@ export const network = z.object({
     .optional(),
   failure: z.string().optional(),
   redirectFrom: z.string().optional(),
+  contextSnapshotRefs: z.array(id).optional(),
   initiator: z.literal("UNKNOWN").default("UNKNOWN"),
   operationCandidates: z
     .array(evidence.extend({ operationId: id }))
@@ -71,6 +85,32 @@ export const network = z.object({
     .default("UNKNOWN"),
   classification: evidence.optional(),
   keep: z.boolean().optional(),
+});
+export const contextSnapshotSchema = z.object({
+  id,
+  operationId: id,
+  phase: z.enum(["BEFORE", "AFTER"]),
+  at: z.number(),
+  url: z.string(),
+  title: z.string(),
+  headings: z.array(z.string()),
+  region: z.object({
+    tag: z.string(),
+    role: z.string().optional(),
+    label: z.string().optional(),
+  }),
+  elements: z.array(
+    z.object({
+      tag: z.string(),
+      role: z.string().optional(),
+      label: z.string().optional(),
+      text: z.string().optional(),
+      name: z.string().optional(),
+      type: z.string().optional(),
+      disabled: z.boolean().optional(),
+      expanded: z.string().optional(),
+    }),
+  ),
 });
 export const recordingSchema = z.object({
   id,
@@ -93,6 +133,10 @@ export const recordingSchema = z.object({
     }),
   ),
   requests: z.array(network),
+  contextSnapshots: z.array(contextSnapshotSchema).optional(),
+  contextCapture: z
+    .object({ omittedSnapshots: z.number().nonnegative() })
+    .optional(),
   dependencies: z
     .array(
       evidence.extend({
@@ -100,6 +144,9 @@ export const recordingSchema = z.object({
         to: id,
         path: id,
         value: z.unknown().optional(),
+        targetLocation: z.enum(["PATH", "QUERY", "BODY", "HEADER"]).optional(),
+        targetKey: z.string().optional(),
+        valueType: valueType.optional(),
       }),
     )
     .default([]),
@@ -164,6 +211,10 @@ export const stepSchema = z.object({
   path: z.record(z.string(), binding),
   query: z.record(z.string(), binding),
   body: binding.optional(),
+  bodyBindings: z.record(z.string(), binding).optional(),
+  extractTypes: z.record(z.string(), valueType).optional(),
+  parallelSafe: z.boolean().optional(),
+  resourceLocks: z.array(id).optional(),
   bodyType: z.enum(["json", "form"]).default("json"),
   headers: z.record(z.string(), binding),
   extract: z.record(z.string(), z.string()),
@@ -186,6 +237,9 @@ export const planSchema = z.object({
   authProfileRef: id,
   uiActions: z.array(action),
   steps: z.array(stepSchema).min(1),
+  execution: z
+    .object({ maxConcurrency: z.number().int().min(1).max(8) })
+    .optional(),
   cleanupPolicy: z.literal("ALWAYS"),
   model: z.object({ provider: id, version: id }),
   generatedAt: z.number(),

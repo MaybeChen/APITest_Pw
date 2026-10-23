@@ -1,3 +1,7 @@
+import {
+  recordingSchema,
+  contextSnapshotSchema,
+} from "../../contracts/src/index.js";
 import { existsSync } from "node:fs";
 import {
   chromium,
@@ -22,6 +26,7 @@ export class Recorder {
   pending = new Set<Promise<void>>();
   capturedBytes = 0;
   private stopping = false;
+  private snapshotBytes = 0;
   recording: Recording;
   constructor(
     input: {
@@ -41,6 +46,8 @@ export class Recorder {
       state: "RECORDING",
       operations: [],
       requests: [],
+      contextSnapshots: [],
+      contextCapture: { omittedSnapshots: 0 },
       dependencies: [],
       redactions: [
         "Credentials, sensitive fields and query parameters redacted before persistence.",
@@ -66,14 +73,113 @@ export class Recorder {
         await route.abort("blockedbyclient");
       }
     });
-    await this.context.exposeBinding(
-      "__record",
-      (_source, event: Recording["operations"][number]) => {
-        if (this.recording.operations.length < 10000)
-          this.recording.operations.push(redact(event));
-      },
-    );
+    await this.context.exposeBinding("__record", (_source, event: unknown) => {
+      if (this.stopping) return;
+      if (event && typeof event === "object" && "snapshot" in event) {
+        const parsed = contextSnapshotSchema.safeParse(
+          (event as { snapshot: unknown }).snapshot,
+        );
+        if (!parsed.success) return;
+        const safe = redact(parsed.data);
+        const size = Buffer.byteLength(JSON.stringify(safe));
+        if (
+          (this.recording.contextSnapshots?.length ?? 0) >= 1000 ||
+          this.snapshotBytes + size > 2097152
+        ) {
+          this.recording.contextCapture!.omittedSnapshots++;
+          return;
+        }
+        this.snapshotBytes += size;
+        this.recording.contextSnapshots!.push(safe);
+        return;
+      }
+      const parsed = recordingSchema.shape.operations.element.safeParse(event);
+      if (parsed.success && this.recording.operations.length < 10000)
+        this.recording.operations.push(redact(parsed.data));
+    });
     await this.context.addInitScript(() => {
+      const send = (event: unknown) =>
+        void (
+          window as unknown as { __record: (e: unknown) => Promise<void> }
+        ).__record(event);
+      const safeText = (element: Element) => {
+        const copy = element.cloneNode(true) as Element;
+        copy
+          .querySelectorAll("input,textarea,select,script,style")
+          .forEach((el) => el.remove());
+        return copy.textContent ?? "";
+      };
+      const snapshot = (
+        operationId: string,
+        phase: "BEFORE" | "AFTER",
+        target: HTMLElement | null,
+      ) => {
+        const region =
+          target?.closest('form,[role="dialog"],dialog,section,main') ??
+          target?.parentElement ??
+          document.body;
+        const visible = (element: Element) =>
+          element instanceof HTMLElement &&
+          !!(
+            element.offsetWidth ||
+            element.offsetHeight ||
+            element.getClientRects().length
+          );
+        const describe = (element: Element) => {
+          const field =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLTextAreaElement ||
+            element instanceof HTMLSelectElement;
+          const sensitive =
+            field &&
+            /password|token|secret|card|cvv/i.test(
+              element.getAttribute("name") ?? "",
+            );
+          return {
+            tag: element.tagName,
+            role: element.getAttribute("role") ?? undefined,
+            label: sensitive
+              ? "[REDACTED]"
+              : (element.getAttribute("aria-label")?.slice(0, 100) ??
+                undefined),
+            text: field ? undefined : safeText(element).slice(0, 120),
+            name: element.getAttribute("name")?.slice(0, 100) ?? undefined,
+            type: element.getAttribute("type") ?? undefined,
+            disabled: element.hasAttribute("disabled"),
+            expanded: element.getAttribute("aria-expanded") ?? undefined,
+          };
+        };
+        send({
+          snapshot: {
+            id: crypto.randomUUID(),
+            operationId,
+            phase,
+            at: Date.now(),
+            url: location.href,
+            title: document.title.slice(0, 160),
+            headings: Array.from(
+              document.querySelectorAll('h1,h2,[role="heading"]'),
+            )
+              .filter(visible)
+              .slice(0, 6)
+              .map((el) => safeText(el).slice(0, 120)),
+            region: {
+              tag: region?.tagName ?? "BODY",
+              role: region?.getAttribute("role") ?? undefined,
+              label:
+                region?.getAttribute("aria-label")?.slice(0, 100) ?? undefined,
+            },
+            elements: Array.from(
+              region?.querySelectorAll(
+                'button,a,label,h1,h2,input,textarea,select,[role="button"]',
+              ) ?? [],
+            )
+              .filter(visible)
+              .slice(0, 24)
+              .map(describe),
+          },
+        });
+      };
       const emit = (type: string, target?: EventTarget | null) => {
         const el = target instanceof HTMLElement ? target : null;
         const sensitive =
@@ -84,7 +190,11 @@ export class Recorder {
           tag: el?.tagName,
           role: el?.getAttribute("role"),
           accessibleName: el?.getAttribute("aria-label"),
-          text: sensitive ? "[REDACTED]" : el?.textContent?.slice(0, 160),
+          text: sensitive
+            ? "[REDACTED]"
+            : el
+              ? safeText(el).slice(0, 160)
+              : undefined,
           attributes: {
             id: el?.id,
             name: el?.getAttribute("name"),
@@ -93,16 +203,26 @@ export class Recorder {
           value: "[OMITTED]",
           state: document.readyState,
         };
-        void (
-          window as unknown as { __record: (e: unknown) => Promise<void> }
-        ).__record({
-          id: crypto.randomUUID(),
+        const operationId = crypto.randomUUID();
+        if (["click", "change", "submit"].includes(type))
+          snapshot(operationId, "BEFORE", el);
+        send({
+          id: operationId,
           type,
           at: Date.now(),
           url: location.href,
           context,
           requestIds: [],
         });
+        if (
+          ["click", "change", "submit", "navigation", "stateChange"].includes(
+            type,
+          )
+        )
+          setTimeout(
+            () => snapshot(operationId, "AFTER", el?.isConnected ? el : null),
+            200,
+          );
       };
       for (const type of ["click", "input", "change", "submit"])
         document.addEventListener(type, (e) => emit(type, e.target), true);
@@ -146,7 +266,14 @@ export class Recorder {
           initiator: "UNKNOWN",
           category: "UNKNOWN",
           operationCandidates: this.recording.operations
-            .filter((o) => at - o.at >= 0 && at - o.at < 1500)
+            .filter(
+              (o) =>
+                ["click", "input", "change", "submit", "navigation"].includes(
+                  o.type,
+                ) &&
+                at - o.at >= 0 &&
+                at - o.at < 1500,
+            )
             .slice(-3)
             .map((o) => ({
               operationId: o.id,
@@ -282,12 +409,43 @@ export class Recorder {
     await this.browser?.close();
     this.recording.state = "STOPPED";
     this.recording.endedAt = Date.now();
-    for (const op of this.recording.operations)
-      op.requestIds = this.recording.requests
-        .filter((r) =>
-          r.operationCandidates.some((c) => c.operationId === op.id),
+    for (const request of this.recording.requests) {
+      request.operationCandidates = this.recording.operations
+        .filter(
+          (op) =>
+            ["click", "input", "change", "submit", "navigation"].includes(
+              op.type,
+            ) &&
+            request.startedAt - op.at >= 0 &&
+            request.startedAt - op.at < 1500,
         )
-        .map((r) => r.id);
+        .slice(-3)
+        .map((op) => ({
+          operationId: op.id,
+          source: "TIME_WINDOW",
+          confidence: 0.4,
+          reason: "Temporal proximity only; causality unconfirmed",
+          confirmed: false,
+        }));
+      const candidates = new Set(
+        request.operationCandidates.map((candidate) => candidate.operationId),
+      );
+      request.contextSnapshotRefs = (this.recording.contextSnapshots ?? [])
+        .filter((snapshot) => candidates.has(snapshot.operationId))
+        .map((snapshot) => snapshot.id);
+    }
+    for (const op of this.recording.operations) {
+      op.requestIds = this.recording.requests
+        .filter((request) =>
+          request.operationCandidates.some(
+            (candidate) => candidate.operationId === op.id,
+          ),
+        )
+        .map((request) => request.id);
+      op.context.snapshotRefs = (this.recording.contextSnapshots ?? [])
+        .filter((snapshot) => snapshot.operationId === op.id)
+        .map((snapshot) => snapshot.id);
+    }
     return this.recording;
   }
 }
@@ -428,25 +586,66 @@ export function analyze(recording: Recording, filter: Filter = {}) {
     assets.push(asset);
   }
   r.dependencies = [];
-  for (let i = 0; i < r.requests.length; i++) {
-    const from = r.requests[i];
-    if (!from.response || typeof from.response !== "object") continue;
-    for (const [key, value] of Object.entries(from.response)) {
-      if (!/id$/i.test(key) || !["string", "number"].includes(typeof value))
-        continue;
-      for (const to of r.requests.slice(i + 1)) {
-        if (
-          decodeURIComponent(to.url).includes(String(value)) ||
-          JSON.stringify(to.body ?? {}).includes(JSON.stringify(value))
-        )
+  const leaves = (
+    value: unknown,
+    path = "$",
+    depth = 0,
+  ): { path: string; key: string; value: string | number }[] => {
+    if (depth > 6 || !value || typeof value !== "object") return [];
+    return Object.entries(value)
+      .slice(0, 100)
+      .flatMap(([key, item]) => {
+        const next = Array.isArray(value)
+          ? `${path}[${key}]`
+          : `${path}.${key}`;
+        return item && typeof item === "object"
+          ? leaves(item, next, depth + 1)
+          : ["string", "number"].includes(typeof item) && item !== "[REDACTED]"
+            ? [{ path: next, key, value: item as string | number }]
+            : [];
+      });
+  };
+  for (let index = 0; index < r.requests.length; index++) {
+    const from = r.requests[index];
+    for (const source of leaves(from.response).filter((leaf) =>
+      /id$/i.test(leaf.key),
+    )) {
+      for (const to of r.requests.slice(index + 1)) {
+        if (from.endedAt !== undefined && from.endedAt > to.startedAt) continue;
+        const url = new URL(to.url);
+        const matches: { location: "PATH" | "QUERY" | "BODY"; key: string }[] =
+          [];
+        url.pathname
+          .split("/")
+          .filter(Boolean)
+          .forEach((segment, i) => {
+            try {
+              if (decodeURIComponent(segment) === String(source.value))
+                matches.push({ location: "PATH", key: String(i) });
+            } catch {
+              /* Malformed escaped path is not a dependency. */
+            }
+          });
+        url.searchParams.forEach((value, key) => {
+          if (value === String(source.value))
+            matches.push({ location: "QUERY", key });
+        });
+        leaves(to.body).forEach((leaf) => {
+          if (String(leaf.value) === String(source.value))
+            matches.push({ location: "BODY", key: leaf.path });
+        });
+        for (const target of matches)
           r.dependencies.push({
             from: from.id,
             to: to.id,
-            path: `$.${key}`,
-            source: "VALUE_MATCH",
+            path: source.path,
+            targetLocation: target.location,
+            targetKey: target.key,
+            valueType: typeof source.value === "number" ? "number" : "string",
+            source: "EXACT_VALUE_MATCH",
             confidence: 0.6,
             reason:
-              "Matching scalar value; business dependency needs confirmation",
+              "Exact scalar match in an earlier response; business dependency still needs confirmation",
             confirmed: false,
           });
       }

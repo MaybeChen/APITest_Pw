@@ -1,3 +1,5 @@
+import { GenerationProgress } from "./components/GenerationProgress";
+import { Workflow } from "./components/Workflow";
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import type {
@@ -550,7 +552,10 @@ function App() {
                     <summary>
                       {r.method} {r.url} · {r.status ?? "等待中"}
                     </summary>
-                    <RequestDetails request={r} />
+                    <RequestDetails
+                      request={r}
+                      snapshots={recording?.contextSnapshots}
+                    />
                   </details>
                 ))}
               </section>
@@ -560,6 +565,19 @@ function App() {
         {tab === "分析与筛选" && (
           <section>
             <h2>候选请求与证据</h2>
+            <GenerationProgress
+              onOpen={(job) => {
+                if (job.testCase && job.plan) {
+                  edit({
+                    testCase: job.testCase,
+                    plan: job.plan,
+                    assets: job.input.assets,
+                  });
+                  setTab("用例编辑");
+                }
+              }}
+            />
+
             {!analysis ? (
               <p className="empty">先停止录制并执行分析。</p>
             ) : (
@@ -639,7 +657,12 @@ function App() {
                       {r.classification?.reason} · 置信度{" "}
                       {r.classification?.confidence}
                     </p>
-                    <RequestDetails request={r} />
+                    <RequestDetails
+                      request={r}
+                      snapshots={
+                        (analysis?.recording ?? recording)?.contextSnapshots
+                      }
+                    />
                     <h3>候选依赖与操作关联</h3>
                     <pre>
                       {JSON.stringify(
@@ -677,17 +700,15 @@ function App() {
                   }
                   onClick={() =>
                     void task(async () => {
-                      edit(
-                        await api<Bundle>("/generate", {
-                          ...analysis,
-                          environmentRef,
-                        }),
-                      );
-                      setTab("用例编辑");
+                      await api("/generations", {
+                        ...analysis,
+                        environmentRef,
+                      });
+                      setNotice("生成工作流已启动，请在下方查看阶段进度。");
                     })
                   }
                 >
-                  生成双产物草稿
+                  启动生成工作流
                 </button>
               </>
             )}
@@ -756,6 +777,7 @@ function App() {
                   </>
                 ) : view === "执行计划" ? (
                   <>
+                    <Workflow plan={bundle.plan} />
                     <p>
                       环境 {bundle.plan.environmentRef} · UI 认证{" "}
                       {bundle.plan.authProfileRef} · Cleanup{" "}

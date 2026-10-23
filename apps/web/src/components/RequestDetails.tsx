@@ -16,7 +16,13 @@ function JsonEvidence({ value, empty }: { value: unknown; empty: string }) {
     <pre>{JSON.stringify(value, null, 2)}</pre>
   );
 }
-export function RequestDetails({ request: r }: { request: RequestEvidence }) {
+export function RequestDetails({
+  request: r,
+  snapshots,
+}: {
+  request: RequestEvidence;
+  snapshots?: Recording["contextSnapshots"];
+}) {
   const bodyNote = r.responseBodyCapture;
   const noBody =
     [204, 304].includes(r.status ?? 0) ||
@@ -43,6 +49,11 @@ export function RequestDetails({ request: r }: { request: RequestEvidence }) {
         <dt>请求时间</dt>
         <dd>{new Date(r.startedAt).toLocaleString()}</dd>
       </dl>
+      <h3>操作时的页面上下文（候选关联）</h3>
+      <JsonEvidence
+        value={snapshots?.filter((s) => r.contextSnapshotRefs?.includes(s.id))}
+        empty="没有关联的页面快照"
+      />
       <h3>请求 Query 参数</h3>
       <JsonEvidence value={r.query} empty="未记录 Query 参数" />
       <h3>请求 Headers</h3>

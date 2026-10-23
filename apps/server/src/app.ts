@@ -21,10 +21,13 @@ import {
 } from "../../../packages/contracts/src/index.js";
 import { validate } from "../../../packages/core/src/index.js";
 import { Recorder, analyze } from "../../../packages/recorder/src/index.js";
+import { type AIProvider } from "../../../packages/planner/src/index.js";
 import {
-  generate,
-  type AIProvider,
-} from "../../../packages/planner/src/index.js";
+  createGeneration,
+  executeGeneration,
+  generationBundle,
+  type Generation,
+} from "../../../packages/planner/src/workflow.js";
 import { createConfiguredAIProvider } from "./ai-config.js";
 import { run } from "../../../packages/runner/src/index.js";
 import { demoArtifacts, demoEnv, demoAuth } from "./demo.js";
@@ -40,7 +43,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     if (!env) throw new Error("Environment not configured");
     return environmentSchema.parse(env);
   }
-  const app = Fastify({ bodyLimit: 4 * 1024 * 1024 });
+  const app = Fastify({ bodyLimit: 16 * 1024 * 1024 });
   await app.register(swagger, {
     openapi: { info: { title: "AI API Testing Platform", version: "0.1.0" } },
   });
@@ -214,31 +217,67 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
       return result;
     },
   );
-  app.post("/api/generate", async (req) => {
+  const activeGenerations = new Map<string, Promise<Generation>>();
+  const saveGeneration = async (job: Generation) => {
+    await store.put("generation", job.id, job.revision, job);
+  };
+  const startGeneration = (job: Generation) => {
+    const promise = executeGeneration(job, aiProvider, saveGeneration).finally(
+      () => activeGenerations.delete(job.id),
+    );
+    activeGenerations.set(job.id, promise);
+    return promise;
+  };
+  const newGeneration = async (body: unknown) => {
     const b = z
       .object({
         recording: recordingSchema,
-        assets: z.array(z.unknown()),
         environmentRef: z.string().default("demo"),
       })
-      .parse(req.body);
-    (await import("../../../packages/contracts/src/index.js")).assetSchema
-      .array()
-      .parse(b.assets);
-    const retained = analyze(b.recording, {
-      overrides: Object.fromEntries(
-        b.recording.requests
-          .filter((r) => r.keep !== undefined)
-          .map((r) => [r.id, !!r.keep]),
-      ),
-    });
-    const result = await generate(aiProvider, {
-      recording: retained.recording,
-      assets: retained.assets,
-      environment: await envFor(b.environmentRef),
-    });
-    return { ...result, assets: retained.assets };
+      .parse(body);
+    const job = createGeneration(
+      {
+        recording: b.recording,
+        assets: [],
+        environment: await envFor(b.environmentRef),
+      },
+      aiProvider,
+    );
+    await saveGeneration(job);
+    return job;
+  };
+  app.post("/api/generate", async (req) =>
+    generationBundle(await startGeneration(await newGeneration(req.body))),
+  );
+  app.post("/api/generations", async (req) => {
+    const job = await newGeneration(req.body);
+    void startGeneration(job).catch((error: unknown) => app.log.error(error));
+    return { id: job.id };
   });
+  app.get("/api/generations", async () =>
+    store.latest<Generation>("generation"),
+  );
+  app.get<{ Params: { id: string } }>("/api/generations/:id", async (req) => {
+    const job = await store.get<Generation>("generation", req.params.id);
+    if (!job) throw new Error("生成任务不存在");
+    return job;
+  });
+  app.post<{ Params: { id: string } }>(
+    "/api/generations/:id/resume",
+    async (req) => {
+      const job = await store.get<Generation>("generation", req.params.id);
+      if (!job) throw new Error("生成任务不存在");
+      if (
+        job.provider.name !== aiProvider.name ||
+        job.provider.version !== aiProvider.version
+      )
+        throw new Error("模型名称或版本已改变，请创建新的生成任务。");
+      if (activeGenerations.has(job.id)) return { id: job.id };
+      if (job.state === "NEEDS_REVIEW") return { id: job.id };
+      void startGeneration(job).catch((error: unknown) => app.log.error(error));
+      return { id: job.id };
+    },
+  );
   app.post("/api/demo", async () => demoArtifacts(randomUUID()));
   const bundle = z.object({
     testCase: caseSchema,
@@ -356,6 +395,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.addHook("onClose", async () => {
     for (const rec of sessions.values()) await rec.stop();
+    await Promise.allSettled(activeGenerations.values());
     await aiProvider.close?.();
     store.client.close();
   });

@@ -40,10 +40,20 @@ React 审查界面 → Fastify API → 独立的 recorder / planner / runner →
 
 ## 当前未完成能力
 
-这是贯通主链路的 v0.1，不能称作需求全文的生产级完整实现。尚未实现：云端远程可见浏览器、完整 workspace 隔离、带版本的草稿自动保存、细粒度字段表单编辑、自动推导完整类型约束与业务依赖、真实模型服务的联网验收、自定义签名算法插件、安全只读并行调度、运行中实时事件推送、独立 AI Recovery、生产级身份权限和审计。
+这是贯通主链路的 v0.1，不能称作需求全文的生产级完整实现。尚未实现：云端远程可见浏览器、完整 workspace 隔离、带版本的草稿自动保存、细粒度字段表单编辑、自动推导完整类型约束与业务依赖、真实模型服务的联网验收、自定义签名算法插件、运行中实时事件推送、独立 AI Recovery、生产级身份权限和审计。
 
 运行中使用最新的环境与 AuthProfile 配置；报告记录精确的 Case/Plan 版本、语义步骤与环境配置快照，以及 AuthProfile 引用；尚未快照 AuthProfile 的配置版本。环境配置的放行与云平台网络 allowlist 为两层独立策略，配置本应用不改变云端 egress 权限。
 
 数据库位置以 storage 模块所在项目的根目录为基准，而非 process.cwd()；用户可显式配置 TRACEPILOT_DATA_DIR。环境/认证配置以最大版本号读取，每 ID 对外展示最新值；前端刷新会自动恢复已保存配置，可切换选择所有环境，编辑未保存内容不会因后台刷新被覆盖。环境选择偏好仅存浏览器 localStorage，配置本体存服务端 SQLite。
 
 allowedOrigins 支持精确 origin 字符串和 hostnameRegex 对象规则，任一匹配即可。正则通过 RE2JS 编译校验，避免回溯式匹配；只针对解析后的 hostname，不匹配整条 URL，默认协议 HTTPS。可选 port 限制端口。规则缓存最多 100 项，历史字符串配置保持兼容。
+
+## 分阶段生成、页面证据与执行 DAG
+
+生成现在使用 EVIDENCE → BUSINESS_FLOW → SEMANTIC_CASE → EXECUTION_PLAN → VALIDATION；有阻塞错误时进入 REPAIR → FINAL_VALIDATION。每个阶段保存独立状态、输出和尝试次数。恢复任务复用成功产物，不重复全部模型调用。模型调用日志携带 stage 和 generationId。修复不改变环境权限，所有产物均为待审核草稿；无法修复的错误保留在校验结果中。
+
+录制在 click/change/submit 前、及操作后约 200ms 保存页面语义摘要：标题、可见标题、附近表单/区域、最多 24 个控件的标签与状态。最多 1000 份摘要、合计 2MiB；不采集输入值，不保存完整 DOM 或截图。请求与摘要通过操作候选关联，仍是 1.5 秒窗口、置信度 0.4 的待确认关联，不能证明因果。参数候选使用前序响应的嵌套 ID 字段与后续路径段、Query、嵌套 Body 的精确值匹配，禁止子串匹配；业务依赖仍需人工确认。
+
+Plan 支持 `execution.maxConcurrency`（1–8，默认 1）、节点 `parallelSafe` 与 `resourceLocks`。仅明确标记且资产为 READ 的 GET/HEAD API 节点可并行；SETUP、写操作、清理保持串行。共享锁互斥，汇合节点等待全部依赖完成；失败依赖的下游不执行。读操作需要 UI 重新认证时强制串行。无论业务调度是否失败，仍进入串行清理阶段。
+
+RESPONSE_VARIABLE 可声明 `fromStep`、`expectedType`，生产节点通过 `extract` 和 `extractTypes` 给出路径与类型。`bodyBindings` 支持嵌套 JSON 路径，禁止原型属性；运行时检查提取和绑定类型。校验器检查来源节点、上游依赖、声明类型及语义依赖。界面显示 DAG、参数绑定和页面证据，细节可在 JSON 编辑中修改。

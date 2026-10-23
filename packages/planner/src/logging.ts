@@ -12,6 +12,7 @@ export interface ModelLogEvent {
   requestId?: string;
   generationId: string;
   attempt: number;
+  stage?: string;
   purpose: "planning" | "connectivity";
   provider: string;
   model: string;

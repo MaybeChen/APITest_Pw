@@ -42,7 +42,7 @@ pnpm build
 
 数据固定保存在项目根目录的 `.data/platform.db`（SQLite），不再随后端启动目录变化，默认不进入 Git。环境与 UI AuthProfile 在点击“保存配置”后持久化，重启后从“已保存配置”选择；同一配置只展示最新版本。浏览器会记住上次选择的环境。后端启动日志会显示实际数据库位置。可用 `TRACEPILOT_DATA_DIR` 指定独立数据目录（建议绝对路径）；Windows PowerShell 示例：`$env:TRACEPILOT_DATA_DIR="D:\TracePilotData"`。备份时请先停止后端，再备份完整 `.data` 目录；不要删除该目录。Recording、API Asset、Semantic Case、Execution Plan 分别存储。批准的 Case/Plan/资产版本不可覆盖；修改需增加版本并重新审核。同一 Case 版本可预先声明多个 `planVersions`，再逐个批准对应计划。每个运行报告记录精确的 Case 和 Plan 版本。原始录制不可变，重新分析不会覆盖证据。
 
-默认读取项目根目录 `config/ai.json`，调用内部 Qwen 模型。当前 baseURL 为 `https://tpsp.dev.huawei.com/llm/qwen3.6/v1`，model 为 `qwen`，无需 API Key，也不发送 Authorization。自动追加 `/chat/completions`。修改配置文件后重启后端；页面顶部显示实际 Provider 和模型，执行计划记录生成来源。需要离线固定模板时，显式将配置改为 `{"provider":"mock"}`；真实服务失败不会静默退回 Mock。可选 `apiKeyEnv` 指定密钥所在的环境变量名，不要在配置中写入密钥值。地址和模型以 `config/ai.json` 为准，不需要设置 `AI_ENDPOINT`、`AI_MODEL` 或 `AI_API_KEY`。Provider 限制两次生成尝试，设置请求超时并用正式 Zod Schema 校验两个产物；模型输出仍为草稿。回归执行不会调用模型。
+默认读取项目根目录 `config/ai.json`，调用内部 Qwen 模型。当前 baseURL 为 `https://tpsp.dev.huawei.com/llm/qwen3.6/v1`，model 为 `qwen`，无需 API Key，也不发送 Authorization。自动追加 `/chat/completions`。修改配置文件后重启后端；页面顶部显示实际 Provider 和模型，执行计划记录生成来源。需要离线固定模板时，显式将配置改为 `{"provider":"mock"}`；真实服务失败不会静默退回 Mock。可选 `apiKeyEnv` 指定密钥所在的环境变量名，不要在配置中写入密钥值。地址和模型以 `config/ai.json` 为准，不需要设置 `AI_ENDPOINT`、`AI_MODEL` 或 `AI_API_KEY`。生成拆为证据整理、业务流程、语义用例、执行计划、确定性校验和有限修复，每个模型阶段最多尝试两次。阶段结果自动保存，页面刷新或后端重启后可从未完成阶段继续；模型输出仍为待审核草稿。回归执行不会调用模型。
 
 API 文档：后端 `/docs`。请求示例见 [API 使用说明](docs/api.md)。设计、安全边界和当前限制见 [架构说明](docs/architecture.md)。
 
@@ -73,3 +73,5 @@ pnpm ai:check --config config/ai.json
 ## 模型调用日志
 
 当前 `config/ai.json` 已开启 logging：后端终端会打印 `[ai]` 输入/输出日志，同时写入项目 `.data/logs/model.jsonl`。包含脱敏输入、响应、耗时、调用 ID、重试序号和 JSON/Schema 校验错误；不记录认证头。默认每条数据最多 64000 字符并标记截断，日志文件达到 10 MiB 后轮转。设置 `logging.enabled=false` 关闭，或 `logging.console=false` 仅保留文件。修改后重启后端；也适用于 `pnpm ai:check` 的最小测试消息。配置详见 docs/api.md。
+
+执行计划支持显式 DAG 依赖、`bodyBindings` 嵌套参数传递及变量类型检查。默认串行；配置 `execution.maxConcurrency` 并明确标记 `parallelSafe` 后，独立 GET/HEAD 只读节点可并发，`resourceLocks` 控制互斥。执行计划页显示依赖图和参数绑定表，字段可通过 JSON 编辑。录制保存操作前后受限的页面语义摘要，在请求详情中查看候选上下文。

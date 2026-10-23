@@ -111,6 +111,49 @@ export function shouldCaptureRequest(
       : hostnameMatches(rule.hostnameRegex, parsed.hostname),
   );
 }
+export function valueKind(
+  value: unknown,
+): "string" | "number" | "boolean" | "object" | "array" | "null" | "undefined" {
+  return value === null
+    ? "null"
+    : Array.isArray(value)
+      ? "array"
+      : (typeof value as ReturnType<typeof valueKind>);
+}
+export function setAtPath(
+  root: unknown,
+  path: string,
+  value: unknown,
+): unknown {
+  if (path === "$" || path === "") return structuredClone(value);
+  if (!/^\$(?:\.[A-Za-z_][\w-]*|\[\d+\])+$/.test(path))
+    throw new Error("Unsupported body binding path");
+  const parts = path
+    .slice(1)
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean);
+  if (
+    parts.some((key) => ["__proto__", "constructor", "prototype"].includes(key))
+  )
+    throw new Error("Unsafe JSON path");
+  const result = structuredClone(root ?? (/^\d+$/.test(parts[0]) ? [] : {}));
+  if (!result || typeof result !== "object")
+    throw new Error("Body bindings require an object or array");
+  let current = result as Record<string, unknown>;
+  parts.forEach((key, index) => {
+    if (index === parts.length - 1) {
+      current[key] = structuredClone(value);
+      return;
+    }
+    if (current[key] === undefined)
+      current[key] = /^\d+$/.test(parts[index + 1]) ? [] : {};
+    if (!current[key] || typeof current[key] !== "object")
+      throw new Error("Body binding crosses scalar value");
+    current = current[key] as Record<string, unknown>;
+  });
+  return result;
+}
 export function allowedURL(url: string, env: Environment) {
   const u = new URL(url);
   if (
@@ -140,6 +183,10 @@ export function resolve(
       return b.value;
     case "RESPONSE_VARIABLE":
       if (!(b.name in vars)) throw new Error(`Missing variable ${b.name}`);
+      if (b.expectedType && valueKind(vars[b.name]) !== b.expectedType)
+        throw new Error(
+          `Variable type mismatch: ${b.name} expected ${b.expectedType}`,
+        );
       return vars[b.name];
     case "ENVIRONMENT_VARIABLE":
       if (!process.env[b.name])
@@ -225,6 +272,14 @@ export function validate(
       errors.push(`Invalid semanticStepRef ${s.id}`);
     if (!a || !a.validated) errors.push(`Unvalidated API Asset ${s.apiId}`);
     if (a) {
+      if (
+        s.parallelSafe &&
+        (s.phase !== "API" ||
+          a.risk !== "READ" ||
+          a.operationType !== "READ" ||
+          !["GET", "HEAD"].includes(a.method))
+      )
+        errors.push(`Unsafe parallel step ${s.id}`);
       if (a.risk !== "READ" && !env.allowWrites)
         errors.push("Writes forbidden");
       if (a.risk === "HIGH" && !env.allowHighRisk)
@@ -256,15 +311,55 @@ export function validate(
       ...Object.values(s.path),
       ...Object.values(s.query),
       ...Object.values(s.headers),
+      ...Object.values(s.bodyBindings ?? {}),
       ...(s.body ? [s.body] : []),
     ]) {
       if (b.source === "MANUAL_REVIEW") errors.push("Unresolved header");
       if (b.source === "RESPONSE_VARIABLE") {
         const producer = producers.get(b.name);
+        if (b.fromStep && b.fromStep !== producer)
+          errors.push(`Variable producer mismatch: ${b.name}`);
+        const producerType = producer
+          ? byId.get(producer)?.extractTypes?.[b.name]
+          : undefined;
+        if (b.expectedType && producerType && b.expectedType !== producerType)
+          errors.push(`Variable type mismatch: ${b.name}`);
         if (!producer || producer === s.id || !ancestors(s.id).has(producer))
           errors.push(`Variable source is not a dependency: ${b.name}`);
       }
     }
+    for (const path of Object.values(s.extract)) {
+      try {
+        atPath({}, path);
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    for (const name of Object.keys(s.extractTypes ?? {}))
+      if (!(name in s.extract))
+        errors.push(`Typed extraction missing: ${name}`);
+    for (const path of Object.keys(s.bodyBindings ?? {})) {
+      try {
+        setAtPath({}, path, null);
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    if (new Set(s.resourceLocks ?? []).size !== (s.resourceLocks ?? []).length)
+      errors.push(`Duplicate resource lock ${s.id}`);
+    if (s.phase !== "CLEANUP")
+      for (const dependency of c.steps.find(
+        (item) => item.id === s.semanticStepRef,
+      )?.dependsOn ?? []) {
+        if (
+          ![...ancestors(s.id)].some(
+            (id) => id !== s.id && byId.get(id)?.semanticStepRef === dependency,
+          )
+        )
+          errors.push(
+            `Semantic dependency not enforced: ${s.id} -> ${dependency}`,
+          );
+      }
     for (const [name, b] of Object.entries(s.headers)) {
       if (sensitive.test(name) && b.source === "STATIC")
         errors.push("Static credentials forbidden");

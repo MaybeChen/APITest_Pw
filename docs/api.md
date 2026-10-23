@@ -203,3 +203,12 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 常见密码、Cookie、Token 字段会脱敏，嵌入 message.content 的 JSON 和已知 API Key 回显也会脱敏。每条事件数据超过 maxChars 会截断并设置 truncated/originalChars；默认日志文件超过 10 MiB 轮转，最多保留 3 个备份，可用 maxFileBytes/backups 调整。日志写入故障不会中断模型生成。`.data` 不进入 Git。`pnpm ai:check` 也使用此日志开关，启用时会额外打印最小连接测试的输入输出，不读取录制数据。
 
 关闭所有调试日志设 enabled=false；仅保存文件不打印终端设 console=false。
+
+生成工作流 API：
+
+- `POST /api/generations`：`{recording, environmentRef}`，立即返回 `{id}`，后台执行阶段。
+- `GET /api/generations`：读取各任务最新修订；`GET /api/generations/:id`：读取单个任务、阶段输入引用、输出、尝试次数和校验结果。
+- `POST /api/generations/:id/resume`：恢复失败或服务重启中断的任务，复用成功阶段，继续使用原始证据快照。模型名称/版本必须相同。活动任务不会重复启动。
+- `POST /api/generate`：兼容同步调用，内部执行同一工作流，返回 `{testCase, plan, assets, workflow}`。
+
+生成状态为 RUNNING、FAILED、NEEDS_REVIEW；每次阶段变更存为独立 SQLite 修订。NEEDS_REVIEW 表示生成结束，仍可能有阻塞校验错误，必须修正并审核才能批准运行。每个模型阶段最多尝试两次；确定性校验后最多执行一个修复阶段。

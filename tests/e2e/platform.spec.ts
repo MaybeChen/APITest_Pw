@@ -280,13 +280,11 @@ test("shows pending classification and saved request and response evidence in an
   await expect(
     page.getByText("当前展示的是规则分析，不是大模型分析。", { exact: false }),
   ).toBeVisible();
-  const details = page
-    .locator("details")
-    .filter({
-      has: page
-        .locator("summary")
-        .filter({ hasText: "POST /wiseoffice/insight/topic/list" }),
-    });
+  const details = page.locator("details").filter({
+    has: page
+      .locator("summary")
+      .filter({ hasText: "POST /wiseoffice/insight/topic/list" }),
+  });
   await details.locator("summary").click();
   await expect(details.getByText("待确认接口", { exact: true })).toBeVisible();
   await expect(
@@ -302,22 +300,61 @@ test("shows pending classification and saved request and response evidence in an
   await expect(
     details.locator("pre").filter({ hasText: "[REDACTED]" }),
   ).toBeVisible();
-  const empty = page
-    .locator("details")
-    .filter({
-      has: page.locator("summary").filter({ hasText: "DELETE /api/empty" }),
-    });
+  const empty = page.locator("details").filter({
+    has: page.locator("summary").filter({ hasText: "DELETE /api/empty" }),
+  });
   await empty.locator("summary").click();
   await expect(
     empty.getByText("此响应没有正文", { exact: true }),
   ).toBeVisible();
-  const omitted = page
-    .locator("details")
-    .filter({
-      has: page.locator("summary").filter({ hasText: "GET /api/stream" }),
-    });
+  const omitted = page.locator("details").filter({
+    has: page.locator("summary").filter({ hasText: "GET /api/stream" }),
+  });
   await omitted.locator("summary").click();
   await expect(
     omitted.getByText("响应没有有效 Content-Length", { exact: false }),
+  ).toBeVisible();
+});
+
+test("restores staged generation progress and opens its workflow draft", async ({
+  page,
+  request,
+}) => {
+  const bundle = await (
+    await request.post("http://127.0.0.1:3000/api/demo")
+  ).json();
+  await page.route("**/api/generations", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "saved-generation",
+          state: "NEEDS_REVIEW",
+          stages: [
+            {
+              id: "EVIDENCE",
+              state: "SUCCEEDED",
+              attempts: 1,
+              output: { requestIds: ["saved-request"] },
+            },
+            { id: "EXECUTION_PLAN", state: "SUCCEEDED", attempts: 1 },
+          ],
+          testCase: bundle.testCase,
+          plan: bundle.plan,
+          input: { assets: bundle.assets },
+        },
+      ],
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /分析与筛选/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "生成工作流", exact: true }),
+  ).toBeVisible();
+  await page.getByText("saved-ge · NEEDS_REVIEW").click();
+  await page.getByRole("button", { name: "打开草稿", exact: true }).click();
+  await page.getByRole("button", { name: "执行计划", exact: true }).click();
+  await expect(page.getByRole("img", { name: "接口依赖工作流" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "参数传递", exact: true }),
   ).toBeVisible();
 });

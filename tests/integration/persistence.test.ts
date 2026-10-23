@@ -285,3 +285,93 @@ it("generates plans for non-/api interface paths and returns actionable errors f
     await app.close();
   }
 });
+
+it("restores interrupted generation checkpoints and resumes through the API", async () => {
+  const { createGeneration, executeGeneration } =
+    await import("../../packages/planner/src/workflow");
+  const { recordingSchema } =
+    await import("../../packages/contracts/src/index");
+  const dir = mkdtempSync(join(tmpdir(), "tracepilot-generation-"));
+  const url = pathToFileURL(join(dir, "platform.db")).href;
+  const provider = new MockAIProvider();
+  const original = provider.runStage.bind(provider);
+  provider.runStage = async (...args) => {
+    if (args[0] === "SEMANTIC_CASE") throw new Error("interrupted");
+    return original(...args);
+  };
+  let store = new Store(url);
+  await store.init();
+  const job = createGeneration(
+    {
+      recording: recordingSchema.parse({
+        id: "persistent-record",
+        caseName: "query",
+        scenario: "query orders",
+        target: demoEnv.baseURL,
+        state: "STOPPED",
+        startedAt: 1,
+        operations: [],
+        requests: [
+          {
+            id: "req",
+            url: demoEnv.baseURL + "/api/orders",
+            method: "GET",
+            resourceType: "fetch",
+            headers: {},
+            query: {},
+            startedAt: 2,
+            category: "BUSINESS",
+            keep: true,
+          },
+        ],
+      }),
+      assets: [],
+      environment: demoEnv,
+    },
+    provider,
+  );
+  await store.put("generation", job.id, job.revision, job);
+  await executeGeneration(job, provider, async (j) => {
+    await store.put("generation", j.id, j.revision, j);
+  });
+  store.client.close();
+  store = new Store(url);
+  const resumedProvider = new MockAIProvider();
+  const calls: string[] = [];
+  const resumeStage = resumedProvider.runStage.bind(resumedProvider);
+  resumedProvider.runStage = async (...args) => {
+    calls.push(args[0]);
+    return resumeStage(...args);
+  };
+  const app = await createApp(store, resumedProvider);
+  try {
+    const restored = (
+      await app.inject({ url: `/api/generations/${job.id}` })
+    ).json();
+    expect(restored.state).toBe("FAILED");
+    expect(
+      restored.stages.find((s: { id: string }) => s.id === "BUSINESS_FLOW")
+        .state,
+    ).toBe("SUCCEEDED");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/generations/${job.id}/resume`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await app.inject({ url: `/api/generations/${job.id}` })).json()
+            .state,
+      )
+      .toBe("NEEDS_REVIEW");
+    expect(calls).not.toContain("BUSINESS_FLOW");
+    expect(calls).toContain("EXECUTION_PLAN");
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
