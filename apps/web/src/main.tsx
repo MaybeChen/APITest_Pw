@@ -929,6 +929,11 @@ function App() {
               显式配置允许访问的站点、写操作权限与声明式登录动作。密码使用
               secretRef 引用服务端环境变量；不要在此输入密钥值。
             </p>
+            <p>
+              内部测试站点使用自签名证书时，可在该环境 JSON 中设置
+              ignoreHTTPSErrors 为 true，仅跳过这个环境的录制与回放证书校验。
+              默认 false；请只对你信任的测试环境开启。
+            </p>
             <div className="toolbar">
               <button
                 className="secondary"

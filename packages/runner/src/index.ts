@@ -130,7 +130,9 @@ export async function run(
       (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
   });
   try {
-    context = await browser.newContext();
+    context = await browser.newContext({
+      ignoreHTTPSErrors: env.ignoreHTTPSErrors ?? false,
+    });
     await context.route("**/*", async (route) => {
       try {
         allowedURL(route.request().url(), env);

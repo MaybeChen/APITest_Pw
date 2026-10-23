@@ -37,7 +37,7 @@ export async function createApp(store = new Store()) {
   async function envFor(id: string) {
     const env = await store.get<Environment>("environment", id);
     if (!env) throw new Error("Environment not configured");
-    return env;
+    return environmentSchema.parse(env);
   }
   const app = Fastify({ bodyLimit: 4 * 1024 * 1024 });
   await app.register(swagger, {

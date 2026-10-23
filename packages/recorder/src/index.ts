@@ -50,7 +50,9 @@ export class Recorder {
         process.env.CHROMIUM_PATH ??
         (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
     });
-    this.context = await this.browser.newContext();
+    this.context = await this.browser.newContext({
+      ignoreHTTPSErrors: this.env.ignoreHTTPSErrors ?? false,
+    });
     await this.context.route("**/*", async (route) => {
       try {
         allowedURL(route.request().url(), this.env);

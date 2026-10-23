@@ -64,3 +64,20 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 ```
 
 `STATIC` 只应用于非敏感值。其他 Binding：`ENVIRONMENT_VARIABLE`、`RESPONSE_VARIABLE`、`RUNTIME_GENERATED`、`AUTH_CONTEXT`、`CLIENT_MANAGED`，或尚未解决的 `MANUAL_REVIEW`。所有凭证只配置引用，不放入请求示例、数据库普通字段或模型输入。
+
+## 内部测试环境的 HTTPS 证书
+
+`ignoreHTTPSErrors` 默认 `false`，旧环境配置未填写此字段时仍校验证书。对于你确认可信且使用自签名/内部 CA 证书的测试环境，可在“环境配置 → 编辑环境”保存以下配置，然后重新开始录制：
+
+```json
+{
+  "id": "my-test",
+  "baseURL": "https://7.238.3.92:38443",
+  "allowedOrigins": ["https://7.238.3.92:38443"],
+  "allowWrites": true,
+  "allowHighRisk": false,
+  "ignoreHTTPSErrors": true
+}
+```
+
+仅选择此环境的录制 BrowserContext 和回放 BrowserContext（包括关联的 APIRequestContext）忽略证书错误；其他环境仍保持默认校验。该开关作用于该环境的整个浏览器上下文，因此应限制 `allowedOrigins`；不会移除目标 origin 校验，也不会改变 AI Provider、依赖安装或全局 Node TLS 设置。修改后需重新创建录制会话。将字段恢复为 `false` 可重新启用校验。

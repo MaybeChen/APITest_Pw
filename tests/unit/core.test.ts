@@ -12,6 +12,20 @@ import { analyze } from "../../packages/recorder/src/index";
 import { generate, MockAIProvider } from "../../packages/planner/src/index";
 import { FixtureManager } from "../../packages/runner/src/index";
 import type { Recording } from "../../packages/contracts/src/index";
+import { environmentSchema } from "../../packages/contracts/src/index";
+it("defaults TLS verification to enabled and requires an explicit per-environment opt-in", () => {
+  const { ignoreHTTPSErrors: _ignored, ...legacy } = demoEnv;
+  expect(environmentSchema.parse(legacy).ignoreHTTPSErrors).toBe(false);
+  expect(
+    environmentSchema.parse({ ...legacy, ignoreHTTPSErrors: true })
+      .ignoreHTTPSErrors,
+  ).toBe(true);
+  expect(
+    environmentSchema.safeParse({ ...legacy, ignoreHTTPSErrors: "true" })
+      .success,
+  ).toBe(false);
+  expect(demoEnv.ignoreHTTPSErrors).toBe(false);
+});
 const approved = () => {
   const b = demoArtifacts();
   b.testCase.status = "APPROVED";

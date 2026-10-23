@@ -201,6 +201,7 @@ export const environmentSchema = z.object({
   allowedOrigins: z.array(z.string().url()).min(1),
   allowWrites: z.boolean(),
   allowHighRisk: z.boolean().default(false),
+  ignoreHTTPSErrors: z.boolean().default(false),
 });
 export type Recording = z.infer<typeof recordingSchema>;
 export type Asset = z.infer<typeof assetSchema>;

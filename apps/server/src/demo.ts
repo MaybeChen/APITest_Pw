@@ -11,6 +11,7 @@ export const demoEnv: Environment = {
   allowedOrigins: ["http://127.0.0.1:3100"],
   allowWrites: true,
   allowHighRisk: true,
+  ignoreHTTPSErrors: false,
 };
 export const demoAuth: AuthProfile = {
   id: "demo-auth",
