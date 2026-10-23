@@ -170,6 +170,23 @@ export class ModelAIProvider implements AIProvider {
   }
 }
 export async function generate(provider: AIProvider, input: PlannerInput) {
+  if (!input.recording.requests.length)
+    throw new Error(
+      "录制中没有 Fetch/XHR 请求，请检查请求域名白名单，并在录制期间执行业务操作后重新录制。",
+    );
+  const retained = input.recording.requests.filter(
+    (request) => request.keep && request.category !== "AUTH_BOOTSTRAP",
+  );
+  if (!retained.length)
+    throw new Error(
+      "没有保留的业务候选请求，请在分析页勾选需要的请求，或重新分析录制；登录请求不能作为业务步骤。",
+    );
+  if (
+    !input.assets.some((asset) =>
+      asset.sources.some((id) => retained.some((request) => request.id === id)),
+    )
+  )
+    throw new Error("保留的请求尚未生成接口资产，请重新分析录制后再生成草稿。");
   let error: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

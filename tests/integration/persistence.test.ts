@@ -217,3 +217,70 @@ it("persists validated hostname rules and rejects invalid patterns without chang
     await app.close();
   }
 });
+
+it("generates plans for non-/api interface paths and returns actionable errors for empty selections", async () => {
+  const store = new Store("file::memory:");
+  const app = await createApp(store);
+  const recording = {
+    id: "non-api",
+    caseName: "查询主题",
+    scenario: "查询业务数据",
+    target: demoEnv.baseURL,
+    notes: "",
+    startedAt: 1,
+    state: "STOPPED",
+    operations: [],
+    dependencies: [],
+    redactions: [],
+    requests: [
+      {
+        id: "topic",
+        url: demoEnv.baseURL + "/wiseoffice/insight/topics/list",
+        method: "POST",
+        resourceType: "fetch",
+        startedAt: 2,
+        headers: {},
+        query: {},
+        body: { topic: "all" },
+        status: 200,
+        response: { items: [] },
+        category: "UNKNOWN",
+        operationCandidates: [],
+        initiator: "UNKNOWN",
+      },
+    ],
+  };
+  try {
+    const success = await app.inject({
+      method: "POST",
+      url: "/api/generate",
+      payload: { recording, assets: [], environmentRef: "demo" },
+    });
+    expect(success.statusCode).toBe(200);
+    expect(success.json().plan.steps).toHaveLength(1);
+    expect(success.json().testCase.steps[0].review).toBe("NEEDS_REVIEW");
+    const excluded = await app.inject({
+      method: "POST",
+      url: "/api/generate",
+      payload: {
+        recording: {
+          ...recording,
+          requests: recording.requests.map((r) => ({ ...r, keep: false })),
+        },
+        assets: [],
+      },
+    });
+    expect(excluded.statusCode).toBe(400);
+    expect(excluded.json().error).toContain("没有保留");
+    expect(excluded.json().error).not.toContain("2 attempts");
+    const empty = await app.inject({
+      method: "POST",
+      url: "/api/generate",
+      payload: { recording: { ...recording, requests: [] }, assets: [] },
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json().error).toContain("请求域名白名单");
+  } finally {
+    await app.close();
+  }
+});

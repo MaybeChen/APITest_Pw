@@ -72,12 +72,10 @@ export async function createApp(store = new Store()) {
       .object({ createOnly: z.boolean().optional() })
       .parse(req.body);
     if (createOnly && (await store.get("environment", data.id)))
-      return reply
-        .code(409)
-        .send({
-          error:
-            "此环境名称 / 标识已存在，请使用其他名称；编辑已有配置请使用保存配置。",
-        });
+      return reply.code(409).send({
+        error:
+          "此环境名称 / 标识已存在，请使用其他名称；编辑已有配置请使用保存配置。",
+      });
     const versions = await store.list<Environment>("environment");
     const version = versions.filter((v) => v.id === data.id).length + 1;
     await store.put("environment", data.id, version, data);
@@ -232,7 +230,9 @@ export async function createApp(store = new Store()) {
         : new MockAIProvider();
     const retained = analyze(b.recording, {
       overrides: Object.fromEntries(
-        b.recording.requests.map((r) => [r.id, !!r.keep]),
+        b.recording.requests
+          .filter((r) => r.keep !== undefined)
+          .map((r) => [r.id, !!r.keep]),
       ),
     });
     const result = await generate(provider, {

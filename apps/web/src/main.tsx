@@ -551,7 +551,8 @@ function App() {
             ) : (
               <>
                 <p>
-                  规则分类与时间关联均为候选证据。未知请求保留在列表中供人工检查。
+                  规则分类与时间关联均为候选证据。非 /api/ 路径的 Fetch/XHR
+                  默认保留为 UNKNOWN 待审核候选。
                 </p>
                 <form
                   onSubmit={(e) => {
@@ -584,6 +585,20 @@ function App() {
                   <input name="resourceTypes" placeholder="排除资源类型" />
                   <button>应用过滤</button>
                 </form>
+                <p role="status">
+                  共 {analysis.recording.requests.length} 个请求，已保留{" "}
+                  {analysis.recording.requests.filter((r) => r.keep).length}{" "}
+                  个，已排除{" "}
+                  {analysis.recording.requests.filter((r) => !r.keep).length}{" "}
+                  个。
+                </p>
+                {!analysis.recording.requests.some((r) => r.keep) && (
+                  <div className="message">
+                    {analysis.recording.requests.length
+                      ? "请勾选需要的业务请求；如为旧分析结果，请重新点击录制会话的“分析录制”。登录请求不能作为业务步骤。"
+                      : "没有录到 Fetch/XHR，请检查请求域名白名单，并在录制期间完成业务操作后重新录制。"}
+                  </div>
+                )}
                 {analysis.recording.requests.map((r) => (
                   <details key={r.id}>
                     <summary>
@@ -604,6 +619,7 @@ function App() {
                       <span className="badge">{r.category}</span>
                     </summary>
                     <p>
+                      {r.keep ? "已保留" : "已排除"} ·{" "}
                       {r.classification?.reason} · 置信度{" "}
                       {r.classification?.confidence}
                     </p>
@@ -636,7 +652,12 @@ function App() {
                   </pre>
                 </details>
                 <button
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    !analysis.recording.requests.some(
+                      (r) => r.keep && r.category !== "AUTH_BOOTSTRAP",
+                    )
+                  }
                   onClick={() =>
                     void task(async () => {
                       edit(

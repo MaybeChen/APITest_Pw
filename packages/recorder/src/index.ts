@@ -269,7 +269,10 @@ export function analyze(recording: Recording, filter: Filter = {}) {
   for (const req of r.requests) {
     const u = new URL(req.url);
     const path = u.pathname;
-    const auth = /\/login|\/auth|\/sso|\/session/.test(path);
+    const auth =
+      /\/(?:login|logout|auth|sso|session|sessions|oauth2?|saml)(?:\/|$|\.(?:action|do|jsp)$)/i.test(
+        path,
+      );
     const telemetry = /telemetry|analytics|heartbeat|metrics/.test(path);
     const stat = ["image", "stylesheet", "script", "font", "media"].includes(
       req.resourceType,
@@ -288,7 +291,9 @@ export function analyze(recording: Recording, filter: Filter = {}) {
       confidence: req.category === "UNKNOWN" ? 0.3 : 0.85,
       reason: auth
         ? "UI authentication bootstrap; excluded from business plan"
-        : `Resource and path rule: ${req.category}`,
+        : req.category === "UNKNOWN"
+          ? "非标准接口路径：保留为待审核候选，不因缺少 /api/ 前缀而排除"
+          : `Resource and path rule: ${req.category}`,
       confirmed: false,
     };
     const excluded =
@@ -298,7 +303,11 @@ export function analyze(recording: Recording, filter: Filter = {}) {
       filter.categories?.includes(req.category) ||
       (filter.pathPattern && path.includes(filter.pathPattern));
     req.keep =
-      filter.overrides?.[req.id] ?? (!excluded && req.category === "BUSINESS");
+      filter.overrides?.[req.id] ??
+      (!excluded &&
+        (req.category === "BUSINESS" ||
+          (req.category === "UNKNOWN" &&
+            ["fetch", "xhr"].includes(req.resourceType))));
     if (req.category === "AUTH_BOOTSTRAP") req.keep = false;
     if (!req.keep) continue;
     const pathTemplate = path.replace(

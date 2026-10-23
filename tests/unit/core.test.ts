@@ -218,7 +218,7 @@ describe("recording analysis and planning", () => {
             return {};
           },
         },
-        { recording, assets: [], environment: demoEnv },
+        { ...analyze(recording), environment: demoEnv },
       ),
     ).rejects.toThrow("2 attempts");
     expect(calls).toBe(2);
@@ -349,3 +349,72 @@ describe("recording request domain whitelist", () => {
     ).toBe(false);
   });
 });
+
+describe("planner input and nonstandard interface paths", () => {
+  it.each(["/wiseoffice/insight/topics/list", "/graphql", "/business/authors"])(
+    "retains %s as a review candidate",
+    async (path) => {
+      const source = structuredClone(recording);
+      source.requests = [
+        { ...source.requests[0], url: demoEnv.baseURL + path },
+      ];
+      const analyzed = analyze(source);
+      expect(analyzed.recording.requests[0].category).toBe("UNKNOWN");
+      expect(analyzed.recording.requests[0].keep).toBe(true);
+      const result = await generate(new MockAIProvider(), {
+        ...analyzed,
+        environment: demoEnv,
+      });
+      expect(result.plan.steps).toHaveLength(1);
+      expect(result.testCase.steps[0].review).toBe("NEEDS_REVIEW");
+      expect(analyze(source, { overrides: { r0: false } }).assets).toEqual([]);
+    },
+  );
+  it("reports missing or excluded evidence without invoking the model", async () => {
+    let calls = 0;
+    const provider = {
+      name: "unused",
+      version: "1",
+      generate: async () => {
+        calls++;
+        throw new Error("must not be called");
+      },
+    };
+    const empty = structuredClone(recording);
+    empty.requests = [];
+    await expect(
+      generate(provider, {
+        recording: empty,
+        assets: [],
+        environment: demoEnv,
+      }),
+    ).rejects.toThrow("没有 Fetch/XHR");
+    const excluded = analyze(recording, {
+      overrides: { r0: false, r1: false },
+    });
+    await expect(
+      generate(provider, { ...excluded, environment: demoEnv }),
+    ).rejects.toThrow("没有保留");
+    const selected = analyze(recording);
+    await expect(
+      generate(provider, {
+        recording: selected.recording,
+        assets: [],
+        environment: demoEnv,
+      }),
+    ).rejects.toThrow("接口资产");
+    expect(calls).toBe(0);
+  });
+});
+
+it.each(["/login.action", "/auth.do"])(
+  "keeps legacy authentication endpoint %s excluded",
+  (path) => {
+    const source = structuredClone(recording);
+    source.requests = [{ ...source.requests[0], url: demoEnv.baseURL + path }];
+    const result = analyze(source, { overrides: { r0: true } });
+    expect(result.recording.requests[0].category).toBe("AUTH_BOOTSTRAP");
+    expect(result.recording.requests[0].keep).toBe(false);
+    expect(result.assets).toHaveLength(0);
+  },
+);
