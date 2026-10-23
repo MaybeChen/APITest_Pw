@@ -179,3 +179,41 @@ it("creates arbitrary environments and rejects duplicate create requests without
     await app.close();
   }
 });
+
+it("persists validated hostname rules and rejects invalid patterns without changing the environment", async () => {
+  const store = new Store("file::memory:");
+  const app = await createApp(store);
+  try {
+    const environment = {
+      ...demoEnv,
+      id: "regex-domain",
+      baseURL: "https://astr-lab.gts.huawei.com",
+      allowedOrigins: [{ hostnameRegex: String.raw`(^|\.)huawei\.com$` }],
+    };
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/environments",
+      payload: environment,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().allowedOrigins[0].protocol).toBe("https:");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/environments",
+          payload: { ...environment, allowedOrigins: [{ hostnameRegex: "[" }] },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (await app.inject({ url: "/api/environments" }))
+        .json()
+        .find((e: { id: string }) => e.id === "regex-domain").allowedOrigins,
+    ).toEqual([
+      { hostnameRegex: String.raw`(^|\.)huawei\.com$`, protocol: "https:" },
+    ]);
+  } finally {
+    await app.close();
+  }
+});

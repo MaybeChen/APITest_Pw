@@ -45,3 +45,5 @@ React 审查界面 → Fastify API → 独立的 recorder / planner / runner →
 运行中使用最新的环境与 AuthProfile 配置；报告记录精确的 Case/Plan 版本、语义步骤与环境配置快照，以及 AuthProfile 引用；尚未快照 AuthProfile 的配置版本。环境配置的放行与云平台网络 allowlist 为两层独立策略，配置本应用不改变云端 egress 权限。
 
 数据库位置以 storage 模块所在项目的根目录为基准，而非 process.cwd()；用户可显式配置 TRACEPILOT_DATA_DIR。环境/认证配置以最大版本号读取，每 ID 对外展示最新值；前端刷新会自动恢复已保存配置，可切换选择所有环境，编辑未保存内容不会因后台刷新被覆盖。环境选择偏好仅存浏览器 localStorage，配置本体存服务端 SQLite。
+
+allowedOrigins 支持精确 origin 字符串和 hostnameRegex 对象规则，任一匹配即可。正则通过 RE2JS 编译校验，避免回溯式匹配；只针对解析后的 hostname，不匹配整条 URL，默认协议 HTTPS。可选 port 限制端口。规则缓存最多 100 项，历史字符串配置保持兼容。

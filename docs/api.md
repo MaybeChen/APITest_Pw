@@ -90,3 +90,28 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 打开“环境配置 → 新增环境”，填写自定义的环境名称 / 标识和站点基础地址即可创建，不限于 `demo` 或 `my-test`。额外允许访问的地址用于登录跳转或独立 API 域名，可换行或逗号分隔，基础地址的 origin 自动加入允许列表。写操作、高风险操作和忽略 HTTPS 证书错误默认关闭。保存后自动选择新环境，录制页下拉列表立即可用；重启后仍保留。
 
 表单提交 `POST /api/environments` 时附带 `createOnly: true`，名称重复返回 409，不覆盖已有配置。原有“保存配置”仍可更新选中环境的 JSON。取消新增不会写入数据库。
+
+## 域名正则放行
+
+`allowedOrigins` 继续支持完整 origin 字符串，也支持明确的正则规则对象。例如放行 `huawei.com` 和任意层级的子域名：
+
+```json
+{
+  "id": "wiseoffice-test",
+  "baseURL": "https://astr-lab.gts.huawei.com",
+  "allowedOrigins": [
+    { "hostnameRegex": "(^|\\.)huawei\\.com$", "protocol": "https:" }
+  ],
+  "allowWrites": false,
+  "allowHighRisk": false,
+  "ignoreHTTPSErrors": false
+}
+```
+
+在新增表单的“允许访问的域名正则（HTTPS）”中直接填写 `(^|\.)huawei\.com$`，无需 JSON 转义，也不要加 `/.../i` 分隔符；每行一条规则。也可在环境 JSON 编辑器中编辑规则。
+
+- 正则只匹配 URL 解析后的 hostname（不包含协议、端口、路径或查询参数），不区分大小写。
+- 上述规则允许 `huawei.com`、`astr-lab.gts.huawei.com`，拒绝 `fakehuawei.com`、`huawei.com.evil.test`，也不会因路径或查询参数中含有 huawei.com 而放行。
+- `protocol` 默认 `https:`；若确需 HTTP，显式设置 `http:`。未指定 `port` 时允许该域名的所有端口；可用数值 `port: 38443` 限制端口。
+- 使用 RE2 语法，支持常见分组、或、字符类及重复；不支持反向引用和前后查找。保存时校验规则，错误规则不会覆盖已有配置。
+- 精确 origin 和正则规则按“任一匹配即可”合并。录制导航、登录跳转、网络路由与 API 回放使用同一个规则检查；全局 Node TLS、测试平台页面来源 allowlist 和云端网络策略不受该配置影响。

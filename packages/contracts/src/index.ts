@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RE2JS } from "re2js";
 export const id = z.string().min(1);
 export const status = z.enum(["DRAFT", "PENDING_REVIEW", "APPROVED"]);
 export const evidence = z.object({
@@ -195,10 +196,30 @@ export const authSchema = z.object({
     .default({}),
   reauthenticateReads: z.boolean().default(false),
 });
+export const hostnamePatternSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((pattern) => {
+    try {
+      RE2JS.compile(pattern, RE2JS.CASE_INSENSITIVE);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Invalid hostname regex: use RE2 syntax without / delimiters or flags");
+export const allowedOriginSchema = z.union([
+  z.string().url(),
+  z.object({
+    hostnameRegex: hostnamePatternSchema,
+    protocol: z.enum(["https:", "http:"]).default("https:"),
+    port: z.number().int().min(1).max(65535).optional(),
+  }),
+]);
 export const environmentSchema = z.object({
   id,
   baseURL: z.string().url(),
-  allowedOrigins: z.array(z.string().url()).min(1),
+  allowedOrigins: z.array(allowedOriginSchema).min(1),
   allowWrites: z.boolean(),
   allowHighRisk: z.boolean().default(false),
   ignoreHTTPSErrors: z.boolean().default(false),

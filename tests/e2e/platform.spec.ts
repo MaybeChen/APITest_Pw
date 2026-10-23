@@ -130,6 +130,16 @@ test("creates a custom environment using the form without overwriting an existin
   await form
     .getByLabel("额外允许访问的地址")
     .fill("https://login.example.test\nhttps://api.example.test");
+  await form.getByLabel("允许访问的域名正则（HTTPS）").fill("[");
+  await form.getByRole("button", { name: "保存新环境" }).click();
+  await expect(form.getByRole("alert")).toContainText("Invalid hostname regex");
+  await form
+    .getByLabel("允许访问的域名正则（HTTPS）")
+    .fill(
+      String.raw`(^|\.)huawei\.com$` +
+        "\n" +
+        String.raw`^internal\.example\.test$`,
+    );
   await form.getByLabel("忽略此环境的 HTTPS 证书错误").check();
   await form.getByRole("button", { name: "保存新环境" }).click();
   await expect(
@@ -150,6 +160,11 @@ test("creates a custom environment using the form without overwriting an existin
     "https://custom.example.test:38443",
     "https://login.example.test",
     "https://api.example.test",
+    { hostnameRegex: String.raw`(^|\.)huawei\.com$`, protocol: "https:" },
+    {
+      hostnameRegex: String.raw`^internal\.example\.test$`,
+      protocol: "https:",
+    },
   ]);
   expect(saved.allowWrites).toBe(false);
   expect(saved.allowHighRisk).toBe(false);

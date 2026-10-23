@@ -223,3 +223,52 @@ describe("recording analysis and planning", () => {
     expect(calls).toBe(2);
   });
 });
+
+describe("hostname regex allowlist rules", () => {
+  const env = environmentSchema.parse({
+    ...demoEnv,
+    baseURL: "https://astr-lab.gts.huawei.com",
+    allowedOrigins: [{ hostnameRegex: String.raw`(^|\.)huawei\.com$` }],
+  });
+  it.each([
+    "https://huawei.com",
+    "https://astr-lab.gts.huawei.com/wiseoffice/insight/#/topic=all",
+    "https://LOGIN.HUAWEI.COM:38443/login",
+  ])("permits %s", (url) => expect(() => allowedURL(url, env)).not.toThrow());
+  it.each([
+    "https://fakehuawei.com",
+    "https://huawei.com.evil.test",
+    "https://evil.test/huawei.com",
+    "https://evil.test/?next=huawei.com",
+    "http://login.huawei.com",
+    "https://user:password@login.huawei.com",
+  ])("rejects %s", (url) => expect(() => allowedURL(url, env)).toThrow());
+  it("retains exact origin rules and supports explicit protocol and port restrictions", () => {
+    expect(() => allowedURL(demoEnv.baseURL, demoEnv)).not.toThrow();
+    const restricted = environmentSchema.parse({
+      ...demoEnv,
+      allowedOrigins: [
+        { hostnameRegex: "^localhost$", protocol: "http:", port: 3100 },
+      ],
+    });
+    expect(() =>
+      allowedURL("http://localhost:3100/test", restricted),
+    ).not.toThrow();
+    expect(() =>
+      allowedURL("http://localhost:3101/test", restricted),
+    ).toThrow();
+    expect(() =>
+      allowedURL("https://localhost:3100/test", restricted),
+    ).toThrow();
+  });
+  it.each(["[", "(?=huawei)", "(a)\\1"])(
+    "rejects malformed or unsupported regex %s",
+    (pattern) =>
+      expect(
+        environmentSchema.safeParse({
+          ...demoEnv,
+          allowedOrigins: [{ hostnameRegex: pattern }],
+        }).success,
+      ).toBe(false),
+  );
+});

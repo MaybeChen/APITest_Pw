@@ -11,6 +11,7 @@ export function EnvironmentForm({
   const [id, setId] = useState("");
   const [baseURL, setBaseURL] = useState("");
   const [origins, setOrigins] = useState("");
+  const [hostPatterns, setHostPatterns] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
   const [allowHighRisk, setAllowHighRisk] = useState(false);
   const [ignoreHTTPSErrors, setIgnoreHTTPSErrors] = useState(false);
@@ -51,7 +52,17 @@ export function EnvironmentForm({
             await onCreate({
               id: id.trim(),
               baseURL: base.href,
-              allowedOrigins: [...new Set([base.origin, ...additional])],
+              allowedOrigins: [
+                ...new Set([base.origin, ...additional]),
+                ...hostPatterns
+                  .split(/\r?\n/)
+                  .map((pattern) => pattern.trim())
+                  .filter(Boolean)
+                  .map((hostnameRegex) => ({
+                    hostnameRegex,
+                    protocol: "https:" as const,
+                  })),
+              ],
               allowWrites,
               allowHighRisk,
               ignoreHTTPSErrors,
@@ -101,6 +112,19 @@ export function EnvironmentForm({
         </label>
         <p>
           基础地址会自动加入允许列表。额外地址请包含协议和端口，不包含路径。
+        </p>
+        <label>
+          允许访问的域名正则（HTTPS）
+          <textarea
+            name="hostnameRegex"
+            value={hostPatterns}
+            onChange={(e) => setHostPatterns(e.target.value)}
+            placeholder={"可选；每行一个，例如 (^|\\.)huawei\\.com$"}
+          />
+        </label>
+        <p>
+          正则只匹配域名，不包含协议、路径或 / 分隔符；默认仅允许 HTTPS。使用
+          (^|\.)huawei\.com$ 可包含根域名及其子域名。
         </p>
         <label>
           <span>

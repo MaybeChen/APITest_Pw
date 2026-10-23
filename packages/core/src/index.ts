@@ -1,3 +1,4 @@
+import { RE2JS } from "re2js";
 import { randomUUID } from "node:crypto";
 import {
   caseSchema,
@@ -83,13 +84,32 @@ export function ordered<T extends { id: string; dependsOn: string[] }>(
   steps.forEach((s) => visit(s.id));
   return out;
 }
+const compiledHostPatterns = new Map<string, RE2JS>();
+function hostnameMatches(pattern: string, hostname: string) {
+  let compiled = compiledHostPatterns.get(pattern);
+  if (!compiled) {
+    compiled = RE2JS.compile(pattern, RE2JS.CASE_INSENSITIVE);
+    if (compiledHostPatterns.size >= 100)
+      compiledHostPatterns.delete(compiledHostPatterns.keys().next().value!);
+    compiledHostPatterns.set(pattern, compiled);
+  }
+  return compiled.matcher(hostname).find();
+}
 export function allowedURL(url: string, env: Environment) {
   const u = new URL(url);
   if (
     !["http:", "https:"].includes(u.protocol) ||
     u.username ||
     u.password ||
-    !env.allowedOrigins.includes(u.origin)
+    !env.allowedOrigins.some((rule) =>
+      typeof rule === "string"
+        ? rule === u.origin
+        : u.protocol === (rule.protocol ?? "https:") &&
+          (rule.port === undefined ||
+            Number(u.port || (u.protocol === "https:" ? 443 : 80)) ===
+              rule.port) &&
+          hostnameMatches(rule.hostnameRegex, u.hostname),
+    )
   )
     throw new Error("Target URL outside allowed environment");
   return u.toString();
