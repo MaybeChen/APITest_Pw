@@ -1,3 +1,4 @@
+import { createModelLogger } from "../../../packages/planner/src/logging.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import * as tls from "node:tls";
@@ -33,6 +34,27 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
     apiKeyEnv: z.string().min(1).optional(),
     caFile: z.string().min(1).optional(),
     ignoreHTTPSErrors: z.boolean().default(false),
+    logging: z
+      .object({
+        enabled: z.boolean().default(false),
+        console: z.boolean().default(true),
+        file: z.string().min(1).optional(),
+        maxChars: z.number().int().min(100).max(1000000).default(64000),
+        maxFileBytes: z
+          .number()
+          .int()
+          .min(1024)
+          .max(104857600)
+          .default(10485760),
+        backups: z.number().int().min(1).max(10).default(3),
+      })
+      .default({
+        enabled: false,
+        console: true,
+        maxChars: 64000,
+        maxFileBytes: 10485760,
+        backups: 3,
+      }),
   }),
 ]);
 export function createConfiguredAIProvider(
@@ -69,6 +91,15 @@ export function createConfiguredAIProvider(
   });
   return new ModelAIProvider({
     endpoint,
+    logger: createModelLogger(
+      {
+        ...config.logging,
+        file: config.logging.file
+          ? resolve(dirname(path), config.logging.file)
+          : undefined,
+      },
+      apiKeyName ? [variables[apiKeyName]!] : [],
+    ),
     model: config.model,
     timeoutMs: config.timeoutMs,
     responseFormat: config.responseFormat,

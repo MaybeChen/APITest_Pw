@@ -179,3 +179,27 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 ## 模型专用的忽略证书配置
 
 按用户对内部 Qwen 服务的明确要求，当前 `config/ai.json` 配置了 `"ignoreHTTPSErrors": true`。它同时作用于模型连通测试与生成请求，支持直连和经代理的目标 TLS；不设置全局 NODE_TLS_REJECT_UNAUTHORIZED，也不关闭代理服务器自己的证书校验。模型客户端不自动跟随重定向，避免该 TLS 例外被带到其他目标。新配置省略该字段仍默认 false。开启时无需 CA 文件；关闭后可使用 caFile 方式正常验证内部证书。
+
+## 模型输入输出日志
+
+在 `config/ai.json` 配置 `logging`，修改后重启后端。当前已显式开启：
+
+```json
+"logging": {
+  "enabled": true,
+  "console": true,
+  "file": "../.data/logs/model.jsonl",
+  "maxChars": 64000
+}
+```
+
+- `request`：模型、地址和脱敏后的消息输入；不记录 HTTP 认证头。
+- `response`：HTTP 状态、耗时和脱敏后的模型响应（包括原始 message.content）。HTTP 错误记录状态，不记录未知错误页正文。
+- `error`：连接、响应解析等调用错误。
+- `validation_error`：JSON 或正式 Schema 校验错误。
+
+每条记录都有时间、purpose（planning/connectivity）、generationId 和 attempt；请求/响应还共享 requestId，可区分同一生成的两次尝试。终端日志以 `[ai]` 开头；文件为一行一条 JSON，路径相对配置文件目录。缺省 logging.enabled 为 false，当前项目为调试显式设 true。
+
+常见密码、Cookie、Token 字段会脱敏，嵌入 message.content 的 JSON 和已知 API Key 回显也会脱敏。每条事件数据超过 maxChars 会截断并设置 truncated/originalChars；默认日志文件超过 10 MiB 轮转，最多保留 3 个备份，可用 maxFileBytes/backups 调整。日志写入故障不会中断模型生成。`.data` 不进入 Git。`pnpm ai:check` 也使用此日志开关，启用时会额外打印最小连接测试的输入输出，不读取录制数据。
+
+关闭所有调试日志设 enabled=false；仅保存文件不打印终端设 console=false。

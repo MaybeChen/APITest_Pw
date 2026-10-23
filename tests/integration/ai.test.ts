@@ -5,7 +5,7 @@ import { runAIConnectivityCheck } from "../../apps/server/src/ai-check";
 import { ModelAIProvider } from "../../packages/planner/src/index";
 import { it, expect } from "vitest";
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConfiguredAIProvider } from "../../apps/server/src/ai-config";
@@ -101,6 +101,7 @@ it("calls a configured v1 base URL without authorization and parses linked model
         baseURL: `http://127.0.0.1:${port}/llm/qwen3.6/v1/`,
         model: "qwen",
         timeoutMs: 3000,
+        logging: { enabled: true, console: false, file: "logs/model.jsonl" },
       }),
     );
     const provider = createConfiguredAIProvider(configPath, {
@@ -130,6 +131,16 @@ it("calls a configured v1 base URL without authorization and parses linked model
     });
     expect(result.testCase.steps[0].title).toBe("创建本次运行专属的测试订单");
     expect(result.plan.status).toBe("DRAFT");
+    const logs = readFileSync(join(dir, "logs/model.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(logs.map((log) => log.event)).toEqual(["request", "response"]);
+    expect(logs[0].requestId).toBe(logs[1].requestId);
+    expect(logs[1].data.choices[0].message.content).toContain(
+      "创建本次运行专属的测试订单",
+    );
+    expect(JSON.stringify(logs)).not.toContain("sensitive-test");
     const probe = await (provider as ModelAIProvider).checkConnection();
     expect(probe.model).toBe("qwen");
     expect(probe.responseCharacters).toBeGreaterThan(0);

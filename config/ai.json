@@ -4,5 +4,11 @@
   "model": "qwen",
   "timeoutMs": 60000,
   "responseFormat": "json_object",
-  "ignoreHTTPSErrors": true
+  "ignoreHTTPSErrors": true,
+  "logging": {
+    "enabled": true,
+    "console": true,
+    "file": "../.data/logs/model.jsonl",
+    "maxChars": 64000
+  }
 }

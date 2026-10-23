@@ -21,6 +21,7 @@ export class Recorder {
   context?: BrowserContext;
   pending = new Set<Promise<void>>();
   capturedBytes = 0;
+  private stopping = false;
   recording: Recording;
   constructor(
     input: {
@@ -114,6 +115,7 @@ export class Recorder {
     });
     const ids = new Map<Request, string>();
     this.context.on("request", (req) => {
+      if (this.stopping) return;
       if (!shouldCaptureRequest(req.url(), req.resourceType(), this.env))
         return;
       if (this.recording.requests.length >= 5000) return;
@@ -272,6 +274,9 @@ export class Recorder {
     return page;
   }
   async stop() {
+    this.stopping = true;
+    // Finish body reads already in progress before closing their browser context.
+    await Promise.allSettled([...this.pending]);
     await this.context?.close();
     await Promise.allSettled([...this.pending]);
     await this.browser?.close();
