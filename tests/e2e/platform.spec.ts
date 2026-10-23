@@ -194,3 +194,130 @@ test("creates a custom environment using the form without overwriting an existin
     id,
   );
 });
+
+test("shows pending classification and saved request and response evidence in analysis details", async ({
+  page,
+}) => {
+  const request = {
+    id: "evidence-1",
+    url: "https://example.test/wiseoffice/insight/topic/list?date=2026-10-23",
+    method: "POST",
+    resourceType: "fetch",
+    startedAt: 1,
+    endedAt: 43,
+    duration: 42,
+    headers: {
+      authorization: "[REDACTED]",
+      "content-type": "application/json",
+    },
+    query: { date: "2026-10-23" },
+    body: { topic: "all" },
+    status: 200,
+    responseHeaders: { "content-type": "application/json" },
+    response: { items: [{ title: "业务主题" }] },
+    responseBodyCapture: { state: "CAPTURED", bytes: 46 },
+    category: "UNKNOWN",
+    keep: true,
+    operationCandidates: [],
+    classification: {
+      source: "RULE",
+      reason: "待人工确认业务含义",
+      confidence: 0.3,
+      confirmed: false,
+    },
+  };
+  const recording = {
+    id: "ui-evidence",
+    caseName: "接口证据展示",
+    scenario: "查看请求和响应",
+    target: "https://example.test",
+    notes: "",
+    startedAt: 1,
+    state: "STOPPED",
+    operations: [],
+    dependencies: [],
+    redactions: [],
+    requests: [
+      request,
+      {
+        ...request,
+        id: "evidence-2",
+        url: "https://example.test/api/empty",
+        method: "DELETE",
+        status: 204,
+        body: undefined,
+        response: undefined,
+        responseBodyCapture: {
+          state: "EMPTY",
+          reason: "此响应没有正文",
+          bytes: 0,
+        },
+      },
+      {
+        ...request,
+        id: "evidence-3",
+        url: "https://example.test/api/stream",
+        method: "GET",
+        body: undefined,
+        response: undefined,
+        responseBodyCapture: {
+          state: "OMITTED",
+          reason:
+            "响应没有有效 Content-Length（可能为 chunked 或流式响应），为避免无界采集未读取正文",
+        },
+      },
+    ],
+  };
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recording] }),
+  );
+  await page.route("**/api/recordings/ui-evidence/analyze", (route) =>
+    route.fulfill({ json: { recording, assets: [] } }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "接口证据展示 · STOPPED" }).click();
+  await page.getByRole("button", { name: "分析录制", exact: true }).click();
+  await expect(
+    page.getByText("当前展示的是规则分析，不是大模型分析。", { exact: false }),
+  ).toBeVisible();
+  const details = page
+    .locator("details")
+    .filter({
+      has: page
+        .locator("summary")
+        .filter({ hasText: "POST /wiseoffice/insight/topic/list" }),
+    });
+  await details.locator("summary").click();
+  await expect(details.getByText("待确认接口", { exact: true })).toBeVisible();
+  await expect(
+    details.getByRole("heading", { name: "请求 Body", exact: true }),
+  ).toBeVisible();
+  await expect(
+    details.locator("pre").filter({ hasText: '"topic": "all"' }),
+  ).toBeVisible();
+  await expect(
+    details.locator("pre").filter({ hasText: "业务主题" }),
+  ).toBeVisible();
+  await expect(details.getByText("42 ms", { exact: true })).toBeVisible();
+  await expect(
+    details.locator("pre").filter({ hasText: "[REDACTED]" }),
+  ).toBeVisible();
+  const empty = page
+    .locator("details")
+    .filter({
+      has: page.locator("summary").filter({ hasText: "DELETE /api/empty" }),
+    });
+  await empty.locator("summary").click();
+  await expect(
+    empty.getByText("此响应没有正文", { exact: true }),
+  ).toBeVisible();
+  const omitted = page
+    .locator("details")
+    .filter({
+      has: page.locator("summary").filter({ hasText: "GET /api/stream" }),
+    });
+  await omitted.locator("summary").click();
+  await expect(
+    omitted.getByText("响应没有有效 Content-Length", { exact: false }),
+  ).toBeVisible();
+});

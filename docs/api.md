@@ -167,3 +167,11 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 原来笼统的 fetch failed 现在会显示底层代码：ENOTFOUND/EAI_AGAIN 提示 DNS/VPN；ECONNREFUSED 提示服务/代理端口；证书错误提示 CA 信任或证书本身有误；超时提示连接/响应超时。固定证书及 DNS 错误不会在规划器中无意义地重复两次。HTTP 401/403/503 仍显示真实状态，不退回 Mock。
 
 模型配置可选 `caFile`，文件路径相对于该配置文件解析，内容是可信 CA 的 PEM 证书；它追加到 Node 默认 CA 信任，而不关闭 TLS 或主机名校验。支持标准 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量。业务浏览器的 ignoreHTTPSErrors 与此独立。
+
+## 分析页的分类和请求详情
+
+`UNKNOWN` 在界面显示为“待确认接口”，表示路径规则不能确认其业务分类；这不是接口失败，也不是 Qwen 的分类结论。分析页明确标注规则来源、置信度、保留状态，生成双产物草稿时才调用模型。
+
+录制页和分析页共用请求详情：完整 URL、Method、资源类型、时间、耗时、Query、请求头/体、响应状态、响应头/体、失败信息及重定向来源。内容均为已保存的脱敏证据，JSON 的 null/false/0 不会被当作没有正文。
+
+新增可选 `responseBodyCapture` 元数据，用 CAPTURED / EMPTY / OMITTED / FAILED 区分已采集、无正文、因策略省略、读取失败。无 Content-Length 的 chunked/流式响应、超出大小或会话预算、二进制、非 JSON 文本及读取超时会显示具体原因，不再静默空白。旧录制中没有保存的正文无法事后恢复；新录制才有完整原因信息。响应预算按响应计数一次，并检查解压后大小。

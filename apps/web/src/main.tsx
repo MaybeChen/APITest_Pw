@@ -10,6 +10,10 @@ import type {
   AuthProfile,
 } from "../../../packages/contracts/src/index";
 import "./style.css";
+import {
+  RequestDetails,
+  requestCategoryLabel,
+} from "./components/RequestDetails";
 import { EnvironmentForm } from "./components/EnvironmentForm";
 type Bundle = { testCase: TestCase; plan: Plan; assets: Asset[] };
 async function api<T>(
@@ -546,7 +550,7 @@ function App() {
                     <summary>
                       {r.method} {r.url} · {r.status ?? "等待中"}
                     </summary>
-                    <pre>{JSON.stringify(r, null, 2)}</pre>
+                    <RequestDetails request={r} />
                   </details>
                 ))}
               </section>
@@ -561,8 +565,8 @@ function App() {
             ) : (
               <>
                 <p>
-                  规则分类与时间关联均为候选证据。非 /api/ 路径的 Fetch/XHR
-                  默认保留为 UNKNOWN 待审核候选。
+                  当前展示的是规则分析，不是大模型分析。非 /api/ 路径的
+                  Fetch/XHR 默认保留为待确认接口，生成双产物草稿时才调用模型。
                 </p>
                 <form
                   onSubmit={(e) => {
@@ -626,17 +630,20 @@ function App() {
                         }}
                       />
                       {r.method} {new URL(r.url).pathname}{" "}
-                      <span className="badge">{r.category}</span>
+                      <span className="badge" title={r.category}>
+                        {requestCategoryLabel(r.category)}
+                      </span>
                     </summary>
                     <p>
                       {r.keep ? "已保留" : "已排除"} ·{" "}
                       {r.classification?.reason} · 置信度{" "}
                       {r.classification?.confidence}
                     </p>
+                    <RequestDetails request={r} />
+                    <h3>候选依赖与操作关联</h3>
                     <pre>
                       {JSON.stringify(
                         {
-                          headers: r.headers,
                           dependencies: analysis.recording.dependencies.filter(
                             (d) => d.to === r.id,
                           ),

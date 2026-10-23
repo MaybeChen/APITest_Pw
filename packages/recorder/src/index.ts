@@ -174,13 +174,41 @@ export class Recorder {
         row.responseHeaders = redact(res.headers());
         try {
           const type = res.headers()["content-type"] ?? "";
-          const length = Number(res.headers()["content-length"] ?? 0);
+          const headerLength = res.headers()["content-length"];
+          const length =
+            headerLength === undefined ? NaN : Number(headerLength);
           if (
-            /json|text/.test(type) &&
-            length > 0 &&
-            length <= 262144 &&
-            this.capturedBytes + length <= 2097152
+            [204, 304].includes(res.status()) ||
+            res.request().method() === "HEAD" ||
+            length === 0
           ) {
+            row.responseBodyCapture = {
+              state: "EMPTY",
+              reason: "此响应没有正文",
+              bytes: 0,
+            };
+          } else if (!/json|text/i.test(type)) {
+            row.responseBodyCapture = {
+              state: "OMITTED",
+              reason: "不采集此内容类型的响应正文",
+            };
+          } else if (!Number.isFinite(length) || length < 0) {
+            row.responseBodyCapture = {
+              state: "OMITTED",
+              reason:
+                "响应没有有效 Content-Length（可能为 chunked 或流式响应），为避免无界采集未读取正文",
+            };
+          } else if (length > 262144) {
+            row.responseBodyCapture = {
+              state: "OMITTED",
+              reason: "响应超过单体 256 KiB 采集上限",
+            };
+          } else if (this.capturedBytes + length > 2097152) {
+            row.responseBodyCapture = {
+              state: "OMITTED",
+              reason: "已达到单会话 2 MiB 响应采集预算",
+            };
+          } else {
             this.capturedBytes += length;
             const data = await Promise.race([
               res.body(),
@@ -191,21 +219,47 @@ export class Recorder {
                 ).unref(),
               ),
             ]);
-            if (
-              data.length > 0 &&
-              length <= 262144 &&
-              this.capturedBytes + length <= 2097152
-            ) {
-              this.capturedBytes += length;
+            // Content-Length can describe compressed bytes; enforce the limit on decoded bytes too.
+            this.capturedBytes += Math.max(0, data.length - length);
+            if (data.length > 262144)
+              row.responseBodyCapture = {
+                state: "OMITTED",
+                reason: "解压后的响应超过单体 256 KiB 采集上限",
+                bytes: data.length,
+              };
+            else if (this.capturedBytes > 2097152)
+              row.responseBodyCapture = {
+                state: "OMITTED",
+                reason: "已达到单会话 2 MiB 响应采集预算",
+                bytes: data.length,
+              };
+            else if (!data.length)
+              row.responseBodyCapture = {
+                state: "EMPTY",
+                reason: "此响应没有正文",
+                bytes: 0,
+              };
+            else {
               try {
                 row.response = redact(JSON.parse(data.toString()));
+                row.responseBodyCapture = {
+                  state: "CAPTURED",
+                  bytes: data.length,
+                };
               } catch {
-                row.response = "[TEXT BODY OMITTED FOR PRIVACY]";
+                row.responseBodyCapture = {
+                  state: "OMITTED",
+                  reason: "非 JSON 文本正文按隐私策略不保存",
+                  bytes: data.length,
+                };
               }
             }
           }
         } catch {
-          row.failure = "Response body unavailable or exceeded capture limit";
+          row.responseBodyCapture = {
+            state: "FAILED",
+            reason: "响应正文读取超时或不可用；请求状态与响应头仍保留",
+          };
         }
         row.endedAt = Date.now();
         row.duration = row.endedAt - row.startedAt;

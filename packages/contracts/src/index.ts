@@ -47,6 +47,13 @@ export const network = z.object({
   status: z.number().optional(),
   responseHeaders: z.record(z.string(), z.string()).optional(),
   response: z.unknown().optional(),
+  responseBodyCapture: z
+    .object({
+      state: z.enum(["CAPTURED", "OMITTED", "EMPTY", "FAILED"]),
+      reason: z.string().optional(),
+      bytes: z.number().nonnegative().optional(),
+    })
+    .optional(),
   failure: z.string().optional(),
   redirectFrom: z.string().optional(),
   initiator: z.literal("UNKNOWN").default("UNKNOWN"),

@@ -360,3 +360,16 @@ footer {
     padding: 8px;
   }
 }
+.request-details dl {
+  display: grid;
+  grid-template-columns: 125px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13px;
+}
+.request-details dt {
+  color: #6b7d72;
+}
+.request-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
