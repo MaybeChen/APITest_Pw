@@ -23,12 +23,13 @@ import { validate } from "../../../packages/core/src/index.js";
 import { Recorder, analyze } from "../../../packages/recorder/src/index.js";
 import {
   generate,
-  MockAIProvider,
-  ModelAIProvider,
+  type AIProvider,
 } from "../../../packages/planner/src/index.js";
+import { createConfiguredAIProvider } from "./ai-config.js";
 import { run } from "../../../packages/runner/src/index.js";
 import { demoArtifacts, demoEnv, demoAuth } from "./demo.js";
-export async function createApp(store = new Store()) {
+export async function createApp(store = new Store(), provider?: AIProvider) {
+  const aiProvider = provider ?? createConfiguredAIProvider();
   await store.init();
   if (!(await store.get("environment", demoEnv.id)))
     await store.put("environment", demoEnv.id, 1, demoEnv);
@@ -105,6 +106,10 @@ export async function createApp(store = new Store()) {
     );
     return data;
   });
+  app.get("/api/ai-provider", async () => ({
+    provider: aiProvider.name,
+    model: aiProvider.version,
+  }));
   app.get("/health", async () => ({ ok: true }));
   app.get("/api/workspaces", async () => {
     const deleted = new Set(
@@ -220,14 +225,6 @@ export async function createApp(store = new Store()) {
     (await import("../../../packages/contracts/src/index.js")).assetSchema
       .array()
       .parse(b.assets);
-    const provider =
-      process.env.AI_ENDPOINT && process.env.AI_API_KEY
-        ? new ModelAIProvider({
-            endpoint: process.env.AI_ENDPOINT,
-            apiKey: process.env.AI_API_KEY,
-            model: process.env.AI_MODEL ?? "configured-model",
-          })
-        : new MockAIProvider();
     const retained = analyze(b.recording, {
       overrides: Object.fromEntries(
         b.recording.requests
@@ -235,7 +232,7 @@ export async function createApp(store = new Store()) {
           .map((r) => [r.id, !!r.keep]),
       ),
     });
-    const result = await generate(provider, {
+    const result = await generate(aiProvider, {
       recording: retained.recording,
       assets: retained.assets,
       environment: await envFor(b.environmentRef),

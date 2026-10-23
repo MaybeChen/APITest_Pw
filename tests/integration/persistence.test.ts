@@ -1,3 +1,4 @@
+import { MockAIProvider } from "../../packages/planner/src/index";
 import { it, expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -143,7 +144,7 @@ it("removes a workspace persistently and preserves approved cases and drafts", a
 
 it("creates arbitrary environments and rejects duplicate create requests without changing saved configuration", async () => {
   const store = new Store("file::memory:");
-  const app = await createApp(store);
+  const app = await createApp(store, new MockAIProvider());
   try {
     const environment = {
       ...demoEnv,
@@ -182,7 +183,7 @@ it("creates arbitrary environments and rejects duplicate create requests without
 
 it("persists validated hostname rules and rejects invalid patterns without changing the environment", async () => {
   const store = new Store("file::memory:");
-  const app = await createApp(store);
+  const app = await createApp(store, new MockAIProvider());
   try {
     const environment = {
       ...demoEnv,
@@ -220,7 +221,7 @@ it("persists validated hostname rules and rejects invalid patterns without chang
 
 it("generates plans for non-/api interface paths and returns actionable errors for empty selections", async () => {
   const store = new Store("file::memory:");
-  const app = await createApp(store);
+  const app = await createApp(store, new MockAIProvider());
   const recording = {
     id: "non-api",
     caseName: "查询主题",

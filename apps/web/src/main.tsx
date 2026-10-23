@@ -47,6 +47,10 @@ function remember(key: string, value: string) {
 }
 function App() {
   const [tab, setTab] = useState("工作区"),
+    [aiProvider, setAIProvider] = useState<{
+      provider: string;
+      model: string;
+    }>(),
     [workspaceId, setWorkspaceId] = useState(""),
     [drafts, setDrafts] = useState<Bundle[]>([]),
     [cases, setCases] = useState<TestCase[]>([]),
@@ -82,7 +86,7 @@ function App() {
     ),
     [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([]);
   const refresh = async () => {
-    const [c, p, r, re, w, en, dr, profiles] = await Promise.all([
+    const [c, p, r, re, w, en, dr, profiles, ai] = await Promise.all([
       api<TestCase[]>("/cases"),
       api<Plan[]>("/plans"),
       api<Recording[]>("/recordings"),
@@ -91,7 +95,9 @@ function App() {
       api<Environment[]>("/environments"),
       api<Bundle[]>("/drafts"),
       api<AuthProfile[]>("/auth-profiles"),
+      api<{ provider: string; model: string }>("/ai-provider"),
     ]);
+    setAIProvider(ai);
     setAuthProfiles(profiles);
     setDrafts(dr);
     setCases(c);
@@ -206,7 +212,11 @@ function App() {
             <p className="eyebrow">WORKSPACE / {tab}</p>
             <h1>{tab}</h1>
           </div>
-          <span className="badge">AI 辅助 · 人工审核 · 确定性回放</span>
+          <span className="badge">
+            {aiProvider
+              ? `${aiProvider.provider} · ${aiProvider.model}`
+              : "加载模型配置…"}
+          </span>
         </header>
         <p className="subtitle">
           从浏览器中的业务流程，到可追溯的 API 回归测试。

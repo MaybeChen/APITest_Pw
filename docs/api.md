@@ -141,3 +141,21 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 非 `/api/` 路径的 Fetch/XHR 也会默认保留为 UNKNOWN 待审核候选，不代表业务规则已确认。登录请求仍不能提升为业务步骤，用户手动排除和过滤规则继续生效。分析页显示总数、保留数与排除数，零保留时禁止生成并给出下一步。
 
 旧录制如果有请求但全部被排除，升级后回到录制会话重新点击“分析录制”，然后检查候选并生成。若录制本身为零请求，应检查请求域名白名单是否匹配实际 API 域名，在录制期间完成业务操作再重新录制。此类输入问题在调用模型前报错，不再重复两次模型生成。
+
+## 内部模型配置
+
+服务端读取项目根目录 `config/ai.json`，不依赖启动目录，修改后需重启后端：
+
+```json
+{
+  "provider": "openai-compatible",
+  "baseURL": "https://tpsp.dev.huawei.com/llm/qwen3.6/v1",
+  "model": "qwen",
+  "timeoutMs": 60000,
+  "responseFormat": "json_object"
+}
+```
+
+实际调用地址：`https://tpsp.dev.huawei.com/llm/qwen3.6/v1/chat/completions`。没有 `apiKeyEnv` 时不要求密钥、不发送 Authorization；若其他模型需要认证，可设置 `apiKeyEnv` 为服务端环境变量名称。网关不支持 JSON response_format 参数时可将 `responseFormat` 改为 `none`，生成结果仍进行 JSON 和正式 Schema 校验。
+
+`GET /api/ai-provider` 返回当前 provider 和 model，页面顶部显示相同信息；计划的 `model` 记录真实生成来源。已保存的 Mock 草稿不会自动变为 Qwen 结果，需要重新生成。显式设置 `{"provider":"mock"}` 可进行离线模板演示；服务失败会明确报错而不会自动回退。运行电脑必须可访问内部模型地址，HTTPS 证书仍正常校验，业务环境的 ignoreHTTPSErrors 不作用于模型调用。

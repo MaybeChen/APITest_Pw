@@ -1,0 +1,52 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import {
+  ModelAIProvider,
+  MockAIProvider,
+  type AIProvider,
+} from "../../../packages/planner/src/index.js";
+
+export const aiConfigSchema = z.discriminatedUnion("provider", [
+  z.object({ provider: z.literal("mock") }),
+  z.object({
+    provider: z.literal("openai-compatible"),
+    baseURL: z
+      .string()
+      .url()
+      .refine((value) => {
+        const u = new URL(value);
+        return (
+          ["http:", "https:"].includes(u.protocol) &&
+          !u.username &&
+          !u.password &&
+          !u.search &&
+          !u.hash
+        );
+      }, "Model baseURL must be an HTTP/HTTPS URL without credentials, query or fragment"),
+    model: z.string().trim().min(1),
+    timeoutMs: z.number().int().min(100).max(300000).default(60000),
+    responseFormat: z.enum(["json_object", "none"]).default("json_object"),
+    apiKeyEnv: z.string().min(1).optional(),
+  }),
+]);
+export function createConfiguredAIProvider(
+  path = fileURLToPath(new URL("../../../config/ai.json", import.meta.url)),
+  variables: NodeJS.ProcessEnv = process.env,
+): AIProvider {
+  const config = aiConfigSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  if (config.provider === "mock") return new MockAIProvider();
+  const apiKeyName = config.apiKeyEnv;
+  if (apiKeyName && !variables[apiKeyName])
+    throw new Error(
+      `Missing model credential environment variable: ${apiKeyName}`,
+    );
+  const endpoint = config.baseURL.replace(/\/+$/, "") + "/chat/completions";
+  return new ModelAIProvider({
+    endpoint,
+    model: config.model,
+    timeoutMs: config.timeoutMs,
+    responseFormat: config.responseFormat,
+    apiKey: apiKeyName ? variables[apiKeyName] : undefined,
+  });
+}
