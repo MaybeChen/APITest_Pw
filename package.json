@@ -15,7 +15,8 @@
     "build": "vite build --config apps/web/vite.config.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "ai:check": "tsx apps/server/src/ai-check.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.1",
@@ -29,6 +30,7 @@
     "re2js": "^2.9.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "undici": "^7.30.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

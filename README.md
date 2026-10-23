@@ -53,3 +53,17 @@ API 文档：后端 `/docs`。请求示例见 [API 使用说明](docs/api.md)。
 新增自己的测试环境：在“环境配置”点击“新增环境”，填写自定义名称、基础地址和可选的额外允许地址，按需开启写操作及内部测试证书选项，再点击“保存新环境”。名称不受 demo/my-test 限制；同名新增会提示冲突，原配置保持不变。保存后可直接在录制页选择。
 
 如只想保存特定域名的接口请求，可在环境中设置 `recordingRequestDomains`，或使用新增环境表单中的“录制请求白名单”。精确域名示例：`["astr-lab.gts.huawei.com"]`；省略或空数组表示不按域名过滤。它只过滤保存的证据，不阻止页面请求；详细正则示例见 docs/api.md。
+
+## 单独检查模型连接
+
+无需启动前端或后端，也不需要录制数据，在项目目录执行：
+
+```bash
+pnpm ai:check
+# 可选：指定另一个配置文件
+pnpm ai:check --config config/ai.json
+```
+
+命令读取模型配置，向真实 `/chat/completions` 发送一次最小测试请求；成功打印模型、地址、耗时和响应字符数，退出码 0；失败显示底层原因并返回 1，不输出密钥、完整响应或录制内容。在 Windows PowerShell 中可用 `$LASTEXITCODE` 查看结果。成功只证明聊天接口可返回有效响应，完整计划生成需另行验证。Mock 配置会明确提示无法测试真实模型。
+
+如果报内部 CA 不受信任，可以在 `config/ai.json` 增加 `"caFile": "certs/huawei-ca.pem"`，将可信的内部 CA PEM 放到 `config/certs/huawei-ca.pem`。相对路径以配置文件目录为基准，也支持绝对路径。仅为模型客户端追加 CA，保留系统信任和域名校验；修改后重新执行命令，或重启后端以应用到规划器。客户端使用 HTTP_PROXY、HTTPS_PROXY、NO_PROXY（也支持小写）环境代理配置，不需要修改业务环境 allowedOrigins。

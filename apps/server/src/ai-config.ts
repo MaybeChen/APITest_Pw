@@ -1,4 +1,7 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import * as tls from "node:tls";
+import { EnvHttpProxyAgent, fetch as httpFetch } from "undici";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
@@ -28,6 +31,7 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
     timeoutMs: z.number().int().min(100).max(300000).default(60000),
     responseFormat: z.enum(["json_object", "none"]).default("json_object"),
     apiKeyEnv: z.string().min(1).optional(),
+    caFile: z.string().min(1).optional(),
   }),
 ]);
 export function createConfiguredAIProvider(
@@ -42,11 +46,25 @@ export function createConfiguredAIProvider(
       `Missing model credential environment variable: ${apiKeyName}`,
     );
   const endpoint = config.baseURL.replace(/\/+$/, "") + "/chat/completions";
+  const ca = config.caFile
+    ? [
+        ...(tls.getCACertificates?.("default") ?? tls.rootCertificates),
+        readFileSync(resolve(dirname(path), config.caFile), "utf8"),
+      ]
+    : undefined;
+  const dispatcher = new EnvHttpProxyAgent({
+    httpProxy: variables.http_proxy ?? variables.HTTP_PROXY ?? "",
+    httpsProxy: variables.https_proxy ?? variables.HTTPS_PROXY ?? "",
+    noProxy: variables.no_proxy ?? variables.NO_PROXY ?? "",
+    ...(ca ? { connect: { ca }, requestTls: { ca } } : {}),
+  });
   return new ModelAIProvider({
     endpoint,
     model: config.model,
     timeoutMs: config.timeoutMs,
     responseFormat: config.responseFormat,
     apiKey: apiKeyName ? variables[apiKeyName] : undefined,
+    requester: (url, options) => httpFetch(url, { ...options, dispatcher }),
+    close: () => dispatcher.close(),
   });
 }

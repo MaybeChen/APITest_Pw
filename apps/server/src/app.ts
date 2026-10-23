@@ -356,6 +356,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.addHook("onClose", async () => {
     for (const rec of sessions.values()) await rec.stop();
+    await aiProvider.close?.();
     store.client.close();
   });
   return app;

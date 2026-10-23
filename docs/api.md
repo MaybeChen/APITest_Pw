@@ -159,3 +159,11 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 实际调用地址：`https://tpsp.dev.huawei.com/llm/qwen3.6/v1/chat/completions`。没有 `apiKeyEnv` 时不要求密钥、不发送 Authorization；若其他模型需要认证，可设置 `apiKeyEnv` 为服务端环境变量名称。网关不支持 JSON response_format 参数时可将 `responseFormat` 改为 `none`，生成结果仍进行 JSON 和正式 Schema 校验。
 
 `GET /api/ai-provider` 返回当前 provider 和 model，页面顶部显示相同信息；计划的 `model` 记录真实生成来源。已保存的 Mock 草稿不会自动变为 Qwen 结果，需要重新生成。显式设置 `{"provider":"mock"}` 可进行离线模板演示；服务失败会明确报错而不会自动回退。运行电脑必须可访问内部模型地址，HTTPS 证书仍正常校验，业务环境的 ignoreHTTPSErrors 不作用于模型调用。
+
+## 模型连接诊断命令
+
+`pnpm ai:check` 读取 `config/ai.json`，使用与规划器相同的传输、模型、可选密钥引用、CA、代理和超时配置，仅发送一条不含业务数据的测试消息。可通过 `--config <path>` 指定其他配置文件。成功退出 0，失败退出 1；不启动 API 服务、不创建 Case、不执行回放。Mock 模式不算真实连接成功。
+
+原来笼统的 fetch failed 现在会显示底层代码：ENOTFOUND/EAI_AGAIN 提示 DNS/VPN；ECONNREFUSED 提示服务/代理端口；证书错误提示 CA 信任或证书本身有误；超时提示连接/响应超时。固定证书及 DNS 错误不会在规划器中无意义地重复两次。HTTP 401/403/503 仍显示真实状态，不退回 Mock。
+
+模型配置可选 `caFile`，文件路径相对于该配置文件解析，内容是可信 CA 的 PEM 证书；它追加到 Node 默认 CA 信任，而不关闭 TLS 或主机名校验。支持标准 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量。业务浏览器的 ignoreHTTPSErrors 与此独立。

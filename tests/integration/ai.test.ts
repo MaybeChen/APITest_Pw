@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { resolve } from "node:path";
+import { runAIConnectivityCheck } from "../../apps/server/src/ai-check";
+import { ModelAIProvider } from "../../packages/planner/src/index";
 import { it, expect } from "vitest";
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -125,6 +130,35 @@ it("calls a configured v1 base URL without authorization and parses linked model
     });
     expect(result.testCase.steps[0].title).toBe("创建本次运行专属的测试订单");
     expect(result.plan.status).toBe("DRAFT");
+    const probe = await (provider as ModelAIProvider).checkConnection();
+    expect(probe.model).toBe("qwen");
+    expect(probe.responseCharacters).toBeGreaterThan(0);
+    expect(received[1].authorization).toBeUndefined();
+    expect(JSON.stringify(received[1].body)).not.toContain("model-input");
+    const command = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        resolve("apps/server/src/ai-check.ts"),
+        "--config",
+        configPath,
+      ],
+      {
+        env: {
+          ...process.env,
+          HTTP_PROXY: "",
+          HTTPS_PROXY: "",
+          http_proxy: "",
+          https_proxy: "",
+          NO_PROXY: "localhost,127.0.0.1",
+          no_proxy: "localhost,127.0.0.1",
+        },
+      },
+    );
+    expect(command.stdout).toContain("模型连接测试成功");
+    expect(command.stdout).toContain("model=qwen");
+    expect(command.stdout).not.toContain("sensitive-test");
     const app = await createApp(new Store("file::memory:"), provider);
     try {
       expect((await app.inject({ url: "/api/ai-provider" })).json()).toEqual({
@@ -189,6 +223,74 @@ it("keeps model failures visible rather than silently returning Mock output", as
     await new Promise<void>((resolve, reject) =>
       server.close((e) => (e ? reject(e) : resolve())),
     );
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("reports connection cause codes without leaking raw error text and skips futile retries", async () => {
+  const { modelConnectionError } =
+    await import("../../packages/planner/src/connection");
+  const cause = Object.assign(new Error("sensitive Bearer credential"), {
+    code: "SELF_SIGNED_CERT_IN_CHAIN",
+  });
+  const failure = new TypeError("fetch failed", { cause });
+  let attempts = 0;
+  const provider = new ModelAIProvider({
+    endpoint: "https://internal.example.test/v1/chat/completions",
+    model: "qwen",
+    requester: async () => {
+      attempts++;
+      throw failure;
+    },
+  });
+  await expect(
+    generate(provider, {
+      recording,
+      assets: demoArtifacts().assets,
+      environment: demoEnv,
+    }),
+  ).rejects.toThrow("SELF_SIGNED_CERT_IN_CHAIN");
+  expect(attempts).toBe(1);
+  const detail = modelConnectionError(
+    failure,
+    "https://internal.example.test/v1/chat/completions",
+  );
+  expect(detail.message).toContain("caFile");
+  expect(detail.message).not.toContain("sensitive");
+  const dns = modelConnectionError(
+    new TypeError("fetch failed", {
+      cause: Object.assign(new Error(), { code: "ENOTFOUND" }),
+    }),
+    "https://internal.example.test/v1/chat/completions",
+  );
+  expect(dns.message).toContain("DNS");
+  const aggregate = modelConnectionError(
+    new AggregateError([Object.assign(new Error(), { code: "ECONNREFUSED" })]),
+    "https://internal.example.test/v1/chat/completions",
+  );
+  expect(aggregate.message).toContain("ECONNREFUSED");
+});
+
+it("connectivity command returns a failure exit code for Mock configuration", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tracepilot-ai-mock-check-"));
+  const path = join(dir, "ai.json");
+  writeFileSync(path, JSON.stringify({ provider: "mock" }));
+  const messages: string[] = [];
+  try {
+    expect(
+      await runAIConnectivityCheck(path, (message) => messages.push(message)),
+    ).toBe(1);
+    expect(messages.join()).toContain("Mock");
+    await expect(
+      promisify(execFile)(process.execPath, [
+        "--import",
+        "tsx",
+        resolve("apps/server/src/ai-check.ts"),
+        "--config",
+        path,
+      ]),
+    ).rejects.toMatchObject({ code: 1 });
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
