@@ -110,6 +110,11 @@ export class Recorder {
     });
     const ids = new Map<Request, string>();
     this.context.on("request", (req) => {
+      if (
+        !["fetch", "xhr"].includes(req.resourceType()) ||
+        !/^https?:\/\//i.test(req.url())
+      )
+        return;
       if (this.recording.requests.length >= 5000) return;
       const rid = randomUUID();
       ids.set(req, rid);

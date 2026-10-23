@@ -77,6 +77,20 @@ it("records real DOM and network evidence, logs in via UI and replays with share
     await page.locator("#orders button").waitFor({ state: "detached" });
     const recording = await rec.stop();
     expect(recording.operations.some((o) => o.type === "click")).toBe(true);
+    expect(recording.operations.some((o) => o.type === "navigation")).toBe(
+      true,
+    );
+    expect(recording.requests.length).toBeGreaterThan(0);
+    expect(
+      recording.requests.every(
+        (r) =>
+          ["fetch", "xhr"].includes(r.resourceType) &&
+          /^https?:\/\//i.test(r.url),
+      ),
+    ).toBe(true);
+    expect(
+      recording.requests.some((r) => new URL(r.url).pathname === "/login"),
+    ).toBe(true);
     expect(
       recording.requests.some((r) => r.method === "DELETE" && r.status === 204),
     ).toBe(true);

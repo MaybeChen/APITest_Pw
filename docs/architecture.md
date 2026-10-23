@@ -24,7 +24,7 @@ React 审查界面 → Fastify API → 独立的 recorder / planner / runner →
 
 ## 证据和隐私
 
-录制包括 document、导航、fetch/XHR 等资源，不宣称获取 JS initiator stack。DOM 事件采用被动观察，不阻止事件传播；采集标签、ARIA 属性、有限文本和状态，不采集输入值，也不为每个请求保存整页 DOM。操作前后状态暂以状态变化事件呈现，不提供 DOM 快照 diff。
+按用户要求，网络录制仅采集 HTTP/HTTPS 的 Fetch/XHR 请求，不保存 document、图片、脚本、样式、字体等资源；页面导航仍作为 DOM 操作事件保留。登录接口属于 Fetch/XHR 时仍记录脱敏证据，分析阶段归类为认证请求，不进入业务执行步骤。不宣称获取 JS initiator stack。DOM 事件采用被动观察，不阻止事件传播；采集标签、ARIA 属性、有限文本和状态，不采集输入值，也不为每个请求保存整页 DOM。操作前后状态暂以状态变化事件呈现，不提供 DOM 快照 diff。
 
 网络采集最多 5000 请求和 10000 操作，单体 256 KiB，单会话响应体预算 2 MiB。只读取带正数 Content-Length 且在限额内的 JSON/text，文本内容为隐私默认省略；无长度、二进制和超限响应不采集正文。正文读取限时 3 秒。Playwright body API 不提供流式截断，这些限制不能作为针对恶意远端的完整内存隔离。Runner 在读取前检查响应 Content-Length，拒绝不明确的非空响应，正文最大 1 MiB；生产使用还应设置进程级资源限制。
 
