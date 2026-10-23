@@ -158,7 +158,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 
 实际调用地址：`https://tpsp.dev.huawei.com/llm/qwen3.6/v1/chat/completions`。没有 `apiKeyEnv` 时不要求密钥、不发送 Authorization；若其他模型需要认证，可设置 `apiKeyEnv` 为服务端环境变量名称。网关不支持 JSON response_format 参数时可将 `responseFormat` 改为 `none`，生成结果仍进行 JSON 和正式 Schema 校验。
 
-`GET /api/ai-provider` 返回当前 provider 和 model，页面顶部显示相同信息；计划的 `model` 记录真实生成来源。已保存的 Mock 草稿不会自动变为 Qwen 结果，需要重新生成。显式设置 `{"provider":"mock"}` 可进行离线模板演示；服务失败会明确报错而不会自动回退。运行电脑必须可访问内部模型地址，HTTPS 证书仍正常校验，业务环境的 ignoreHTTPSErrors 不作用于模型调用。
+`GET /api/ai-provider` 返回当前 provider 和 model，页面顶部显示相同信息；计划的 `model` 记录真实生成来源。已保存的 Mock 草稿不会自动变为 Qwen 结果，需要重新生成。显式设置 `{"provider":"mock"}` 可进行离线模板演示；服务失败会明确报错而不会自动回退。运行电脑必须可访问内部模型地址，模型证书行为由 config/ai.json 中独立的 ignoreHTTPSErrors 控制，业务环境同名选项不作用于模型调用。
 
 ## 模型连接诊断命令
 
@@ -175,3 +175,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 录制页和分析页共用请求详情：完整 URL、Method、资源类型、时间、耗时、Query、请求头/体、响应状态、响应头/体、失败信息及重定向来源。内容均为已保存的脱敏证据，JSON 的 null/false/0 不会被当作没有正文。
 
 新增可选 `responseBodyCapture` 元数据，用 CAPTURED / EMPTY / OMITTED / FAILED 区分已采集、无正文、因策略省略、读取失败。无 Content-Length 的 chunked/流式响应、超出大小或会话预算、二进制、非 JSON 文本及读取超时会显示具体原因，不再静默空白。旧录制中没有保存的正文无法事后恢复；新录制才有完整原因信息。响应预算按响应计数一次，并检查解压后大小。
+
+## 模型专用的忽略证书配置
+
+按用户对内部 Qwen 服务的明确要求，当前 `config/ai.json` 配置了 `"ignoreHTTPSErrors": true`。它同时作用于模型连通测试与生成请求，支持直连和经代理的目标 TLS；不设置全局 NODE_TLS_REJECT_UNAUTHORIZED，也不关闭代理服务器自己的证书校验。模型客户端不自动跟随重定向，避免该 TLS 例外被带到其他目标。新配置省略该字段仍默认 false。开启时无需 CA 文件；关闭后可使用 caFile 方式正常验证内部证书。

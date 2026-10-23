@@ -67,3 +67,5 @@ pnpm ai:check --config config/ai.json
 命令读取模型配置，向真实 `/chat/completions` 发送一次最小测试请求；成功打印模型、地址、耗时和响应字符数，退出码 0；失败显示底层原因并返回 1，不输出密钥、完整响应或录制内容。在 Windows PowerShell 中可用 `$LASTEXITCODE` 查看结果。成功只证明聊天接口可返回有效响应，完整计划生成需另行验证。Mock 配置会明确提示无法测试真实模型。
 
 如果报内部 CA 不受信任，可以在 `config/ai.json` 增加 `"caFile": "certs/huawei-ca.pem"`，将可信的内部 CA PEM 放到 `config/certs/huawei-ca.pem`。相对路径以配置文件目录为基准，也支持绝对路径。仅为模型客户端追加 CA，保留系统信任和域名校验；修改后重新执行命令，或重启后端以应用到规划器。客户端使用 HTTP_PROXY、HTTPS_PROXY、NO_PROXY（也支持小写）环境代理配置，不需要修改业务环境 allowedOrigins。
+
+内部模型跳过证书校验：在 `config/ai.json` 设置 `"ignoreHTTPSErrors": true`。当前按用户要求对内部 Qwen 服务开启；此选项只影响该模型的专用客户端，包含 `pnpm ai:check` 与规划调用，不修改全局 TLS 或代理自身的证书信任。开启后不需要 `caFile`；关闭或省略此选项时恢复正常证书校验。模型请求不自动跟随重定向。

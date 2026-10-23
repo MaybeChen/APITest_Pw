@@ -294,3 +294,63 @@ it("connectivity command returns a failure exit code for Mock configuration", as
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("requires explicit model TLS opt-in and rejects invalid switch values", async () => {
+  const { aiConfigSchema } = await import("../../apps/server/src/ai-config");
+  const settings = {
+    provider: "openai-compatible",
+    baseURL: "https://internal.example.test/v1",
+    model: "qwen",
+  };
+  const strict = aiConfigSchema.parse(settings);
+  expect(
+    strict.provider === "openai-compatible" && strict.ignoreHTTPSErrors,
+  ).toBe(false);
+  const opted = aiConfigSchema.parse({ ...settings, ignoreHTTPSErrors: true });
+  expect(
+    opted.provider === "openai-compatible" && opted.ignoreHTTPSErrors,
+  ).toBe(true);
+  expect(
+    aiConfigSchema.safeParse({ ...settings, ignoreHTTPSErrors: "true" })
+      .success,
+  ).toBe(false);
+});
+
+it("does not follow model redirects when using a dedicated model transport", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tracepilot-model-redirect-"));
+  const path = join(dir, "ai.json");
+  let destinationCalls = 0;
+  const server = createServer((req, res) => {
+    if (req.url === "/v1/chat/completions") {
+      res.writeHead(302, { location: "/different-host-target" });
+      res.end();
+    } else {
+      destinationCalls++;
+      res.end("unexpected");
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let provider: ReturnType<typeof createConfiguredAIProvider> | undefined;
+  try {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        provider: "openai-compatible",
+        baseURL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+        model: "qwen",
+        ignoreHTTPSErrors: true,
+      }),
+    );
+    provider = createConfiguredAIProvider(path, {});
+    await expect(
+      (provider as ModelAIProvider).checkConnection(),
+    ).rejects.toThrow("Model HTTP 302");
+    expect(destinationCalls).toBe(0);
+  } finally {
+    await provider?.close?.();
+    await new Promise<void>((resolve, reject) =>
+      server.close((e) => (e ? reject(e) : resolve())),
+    );
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

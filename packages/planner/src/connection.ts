@@ -72,6 +72,7 @@ export function modelConnectionError(
 }
 export interface ModelRequestOptions {
   method: "POST";
+  redirect: "manual";
   signal: AbortSignal;
   headers: Record<string, string>;
   body: string;

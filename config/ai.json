@@ -3,5 +3,6 @@
   "baseURL": "https://tpsp.dev.huawei.com/llm/qwen3.6/v1",
   "model": "qwen",
   "timeoutMs": 60000,
-  "responseFormat": "json_object"
+  "responseFormat": "json_object",
+  "ignoreHTTPSErrors": true
 }

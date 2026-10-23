@@ -32,6 +32,7 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
     responseFormat: z.enum(["json_object", "none"]).default("json_object"),
     apiKeyEnv: z.string().min(1).optional(),
     caFile: z.string().min(1).optional(),
+    ignoreHTTPSErrors: z.boolean().default(false),
   }),
 ]);
 export function createConfiguredAIProvider(
@@ -46,17 +47,25 @@ export function createConfiguredAIProvider(
       `Missing model credential environment variable: ${apiKeyName}`,
     );
   const endpoint = config.baseURL.replace(/\/+$/, "") + "/chat/completions";
-  const ca = config.caFile
-    ? [
-        ...(tls.getCACertificates?.("default") ?? tls.rootCertificates),
-        readFileSync(resolve(dirname(path), config.caFile), "utf8"),
-      ]
-    : undefined;
+  const ca =
+    !config.ignoreHTTPSErrors && config.caFile
+      ? [
+          ...(tls.getCACertificates?.("default") ?? tls.rootCertificates),
+          readFileSync(resolve(dirname(path), config.caFile), "utf8"),
+        ]
+      : undefined;
   const dispatcher = new EnvHttpProxyAgent({
     httpProxy: variables.http_proxy ?? variables.HTTP_PROXY ?? "",
     httpsProxy: variables.https_proxy ?? variables.HTTPS_PROXY ?? "",
     noProxy: variables.no_proxy ?? variables.NO_PROXY ?? "",
-    ...(ca ? { connect: { ca }, requestTls: { ca } } : {}),
+    connect: {
+      ...(ca ? { ca } : {}),
+      rejectUnauthorized: !config.ignoreHTTPSErrors,
+    },
+    requestTls: {
+      ...(ca ? { ca } : {}),
+      rejectUnauthorized: !config.ignoreHTTPSErrors,
+    },
   });
   return new ModelAIProvider({
     endpoint,
