@@ -49,3 +49,62 @@ test("persists a draft and restores it after a page reload", async ({
     page.getByText("Case v2 / Plan v2", { exact: false }),
   ).toBeVisible();
 });
+
+test("restores saved environment configuration and recording selection after reload", async ({
+  page,
+}) => {
+  const id = "saved-env-" + Date.now();
+  await page.goto("/");
+  await page.getByRole("button", { name: /环境配置/ }).click();
+  const editor = page.getByRole("textbox", { name: "环境配置 JSON" });
+  await expect(editor).toHaveValue(/"baseURL"/);
+  await editor.fill(
+    JSON.stringify({
+      id,
+      baseURL: "https://7.238.3.92:38443",
+      allowedOrigins: ["https://7.238.3.92:38443"],
+      allowWrites: true,
+      allowHighRisk: false,
+      ignoreHTTPSErrors: true,
+    }),
+  );
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByText("配置已保存；后续验证和回放使用最新配置。"),
+  ).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
+    id,
+  );
+  await page.reload();
+  await page.getByRole("button", { name: /环境配置/ }).click();
+  await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
+    id,
+  );
+  await expect(editor).toHaveValue(/"ignoreHTTPSErrors": true/);
+  await page.getByRole("button", { name: /浏览器录制/ }).click();
+  await expect(page.getByRole("combobox", { name: "执行环境" })).toHaveValue(
+    id,
+  );
+});
+
+test("deletes a workspace after confirmation and keeps it deleted after reload", async ({
+  page,
+}) => {
+  const name = "删除验证-" + Date.now();
+  await page.goto("/");
+  await page.getByPlaceholder("工作区名称").fill(name);
+  await page.getByRole("button", { name: "创建工作区", exact: true }).click();
+  const remove = page.getByRole("button", {
+    name: "删除工作区 " + name,
+    exact: true,
+  });
+  await expect(remove).toBeVisible();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await remove.click();
+  await expect(remove).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+  await page.reload();
+  await expect(remove).toHaveCount(0);
+});

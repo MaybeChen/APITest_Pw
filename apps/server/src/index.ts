@@ -1,3 +1,4 @@
+import { defaultDatabaseURL } from "../../../packages/storage/src/index.js";
 import { createApp } from "./app.js";
 import { demoApp } from "../../demo-app/src/app.js";
 process.env.DEMO_PASSWORD ??= "demo-only";
@@ -10,3 +11,5 @@ for (const signal of ["SIGINT", "SIGTERM"])
     void Promise.all([app.close(), demo.close()]).then(() => process.exit());
   });
 console.log("Platform API :3000; demo :3100. Start web with pnpm web.");
+
+console.log("Persistent database:", defaultDatabaseURL());

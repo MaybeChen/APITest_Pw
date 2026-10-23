@@ -6,23 +6,43 @@ import type {
   Asset,
   Recording,
   Report,
+  Environment,
+  AuthProfile,
 } from "../../../packages/contracts/src/index";
 import "./style.css";
 type Bundle = { testCase: TestCase; plan: Plan; assets: Asset[] };
-async function api<T>(path: string, body?: unknown): Promise<T> {
+async function api<T>(
+  path: string,
+  body?: unknown,
+  method?: string,
+): Promise<T> {
   const r = await fetch(
     "/api" + path,
     body === undefined
-      ? {}
+      ? { method: method ?? "GET" }
       : {
-          method: "POST",
+          method: method ?? "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         },
   );
-  const data = await r.json();
+  const data = r.status === 204 ? undefined : await r.json();
   if (!r.ok) throw new Error(data.error ?? "请求失败");
   return data;
+}
+function preference(key: string, fallback: string) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function remember(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* Preferences are optional; server data remains persistent. */
+  }
 }
 function App() {
   const [tab, setTab] = useState("工作区"),
@@ -46,32 +66,69 @@ function App() {
     [view, setView] = useState("语义用例"),
     [selection, setSelection] = useState(""),
     [configText, setConfigText] = useState(""),
-    [configKind, setConfigKind] = useState("environments"),
-    [environments, setEnvironments] = useState<
-      { id: string; baseURL: string }[]
-    >([]),
-    [environmentRef, setEnvironmentRef] = useState("demo"),
+    [configKind, setConfigKind] = useState(() =>
+      preference("tracepilot.configKind", "environments"),
+    ),
+    [configId, setConfigId] = useState(() =>
+      preference("tracepilot.configId", ""),
+    ),
+    [configDirty, setConfigDirty] = useState(false),
+    [authProfiles, setAuthProfiles] = useState<AuthProfile[]>([]),
+    [environments, setEnvironments] = useState<Environment[]>([]),
+    [environmentRef, setEnvironmentRef] = useState(() =>
+      preference("tracepilot.environmentRef", "demo"),
+    ),
     [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([]);
   const refresh = async () => {
-    const [c, p, r, re, w, en, dr] = await Promise.all([
+    const [c, p, r, re, w, en, dr, profiles] = await Promise.all([
       api<TestCase[]>("/cases"),
       api<Plan[]>("/plans"),
       api<Recording[]>("/recordings"),
       api<Report[]>("/reports"),
       api<{ id: string; name: string }[]>("/workspaces"),
-      api<{ id: string; baseURL: string }[]>("/environments"),
+      api<Environment[]>("/environments"),
       api<Bundle[]>("/drafts"),
+      api<AuthProfile[]>("/auth-profiles"),
     ]);
+    setAuthProfiles(profiles);
     setDrafts(dr);
     setCases(c);
     setPlans(p);
     setRecordings(r);
     setReports(re);
     setWorkspaces(w);
-    setEnvironments(
-      en.filter((e, i, a) => a.findIndex((x) => x.id === e.id) === i),
+    setEnvironments(en);
+    setEnvironmentRef((current) =>
+      en.some((e) => e.id === current) ? current : (en[0]?.id ?? "demo"),
+    );
+    setWorkspaceId((current) =>
+      w.some((item) => item.id === current) ? current : "",
     );
   };
+  useEffect(() => {
+    remember("tracepilot.environmentRef", environmentRef);
+  }, [environmentRef]);
+  useEffect(() => {
+    remember("tracepilot.configKind", configKind);
+    remember("tracepilot.configId", configId);
+    if (configDirty) return;
+    const items = configKind === "environments" ? environments : authProfiles;
+    const selected =
+      items.find((item) => item.id === configId) ??
+      items.find((item) => item.id === environmentRef) ??
+      items[0];
+    if (selected) {
+      setConfigId(selected.id);
+      setConfigText(JSON.stringify(selected, null, 2));
+    }
+  }, [
+    configKind,
+    configId,
+    environmentRef,
+    environments,
+    authProfiles,
+    configDirty,
+  ]);
   useEffect(() => {
     void refresh().catch((e) => setError(String(e)));
   }, []);
@@ -217,7 +274,32 @@ function App() {
                 <button disabled={busy}>创建工作区</button>
               </form>
               {workspaces.map((w) => (
-                <p key={w.id}>{w.name}</p>
+                <div className="row" key={w.id}>
+                  <span>{w.name}</span>
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    aria-label={`删除工作区 ${w.name}`}
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          `删除工作区“${w.name}”？用例、录制和报告将保留，可从“全部工作区”查看。`,
+                        )
+                      )
+                        return;
+                      void task(async () => {
+                        await api(
+                          `/workspaces/${encodeURIComponent(w.id)}`,
+                          undefined,
+                          "DELETE",
+                        );
+                        setNotice("工作区已删除，用例、录制和报告已保留。");
+                      });
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
               ))}
             </section>
             <section>
@@ -939,9 +1021,9 @@ function App() {
                 className="secondary"
                 onClick={() =>
                   void task(async () => {
-                    const values = await api<unknown[]>("/environments");
+                    setConfigDirty(false);
                     setConfigKind("environments");
-                    setConfigText(JSON.stringify(values[0] ?? {}, null, 2));
+                    setConfigId(environmentRef);
                   })
                 }
               >
@@ -951,27 +1033,61 @@ function App() {
                 className="secondary"
                 onClick={() =>
                   void task(async () => {
-                    const values = await api<unknown[]>("/auth-profiles");
+                    setConfigDirty(false);
                     setConfigKind("auth-profiles");
-                    setConfigText(JSON.stringify(values[0] ?? {}, null, 2));
+                    setConfigId(authProfiles[0]?.id ?? "");
                   })
                 }
               >
                 编辑 UI AuthProfile
               </button>
             </div>
-            <p>当前配置类型：{configKind}。修改 id 可新建配置。</p>
+            <label>
+              已保存配置
+              <select
+                aria-label="已保存配置"
+                value={configId}
+                onChange={(e) => {
+                  setConfigDirty(false);
+                  setConfigId(e.target.value);
+                }}
+              >
+                {(configKind === "environments"
+                  ? environments
+                  : authProfiles
+                ).map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p>
+              当前配置类型：{configKind}。修改 id
+              可新建配置。保存后写入本地数据库，刷新或重启后仍可选择。
+            </p>
             <textarea
               className="json"
               aria-label="环境配置 JSON"
               value={configText}
-              onChange={(e) => setConfigText(e.target.value)}
+              onChange={(e) => {
+                setConfigText(e.target.value);
+                setConfigDirty(true);
+              }}
             />
             <button
               disabled={busy}
               onClick={() =>
                 void task(async () => {
-                  await api("/" + configKind, JSON.parse(configText));
+                  const saved = await api<{ id: string }>(
+                    "/" + configKind,
+                    JSON.parse(configText),
+                  );
+                  await refresh();
+                  setConfigDirty(false);
+                  setConfigId(saved.id);
+                  if (configKind === "environments")
+                    setEnvironmentRef(saved.id);
                   setNotice("配置已保存；后续验证和回放使用最新配置。");
                 })
               }

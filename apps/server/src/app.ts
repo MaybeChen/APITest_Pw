@@ -64,8 +64,8 @@ export async function createApp(store = new Store()) {
     )
       return reply.code(403).send({ error: "Untrusted origin" });
   });
-  app.get("/api/environments", async () => store.list("environment"));
-  app.get("/api/auth-profiles", async () => store.list("auth"));
+  app.get("/api/environments", async () => store.latest("environment"));
+  app.get("/api/auth-profiles", async () => store.latest("auth"));
   app.post("/api/environments", async (req) => {
     const data = environmentSchema.parse(req.body);
     const versions = await store.list<Environment>("environment");
@@ -98,7 +98,36 @@ export async function createApp(store = new Store()) {
     return data;
   });
   app.get("/health", async () => ({ ok: true }));
-  app.get("/api/workspaces", async () => store.list("workspace"));
+  app.get("/api/workspaces", async () => {
+    const deleted = new Set(
+      (await store.list<{ id: string }>("workspace-deletion")).map((w) => w.id),
+    );
+    return (await store.list<{ id: string; name: string }>("workspace")).filter(
+      (w) => !deleted.has(w.id),
+    );
+  });
+  app.delete<{ Params: { id: string } }>(
+    "/api/workspaces/:id",
+    async (req, reply) => {
+      const { id } = req.params;
+      if (!(await store.get("workspace", id)))
+        return reply.code(404).send({ error: "Workspace not found" });
+      if (
+        Array.from(sessions.values()).some(
+          (s) => s.recording.workspaceId === id,
+        )
+      )
+        return reply
+          .code(409)
+          .send({ error: "请先停止此工作区的录制，再删除工作区。" });
+      if (!(await store.get("workspace-deletion", id)))
+        await store.put("workspace-deletion", id, 1, {
+          id,
+          deletedAt: Date.now(),
+        });
+      return reply.code(204).send();
+    },
+  );
   app.post("/api/workspaces", async (req) => {
     const b = z.object({ name: z.string().min(1) }).parse(req.body);
     const w = { id: randomUUID(), ...b };

@@ -40,10 +40,12 @@ pnpm build
 
 ## 数据与模型
 
-数据保存在 `.data/platform.db`（SQLite），默认不进入 Git。Recording、API Asset、Semantic Case、Execution Plan 分别存储。批准的 Case/Plan/资产版本不可覆盖；修改需增加版本并重新审核。同一 Case 版本可预先声明多个 `planVersions`，再逐个批准对应计划。每个运行报告记录精确的 Case 和 Plan 版本。原始录制不可变，重新分析不会覆盖证据。
+数据固定保存在项目根目录的 `.data/platform.db`（SQLite），不再随后端启动目录变化，默认不进入 Git。环境与 UI AuthProfile 在点击“保存配置”后持久化，重启后从“已保存配置”选择；同一配置只展示最新版本。浏览器会记住上次选择的环境。后端启动日志会显示实际数据库位置。可用 `TRACEPILOT_DATA_DIR` 指定独立数据目录（建议绝对路径）；Windows PowerShell 示例：`$env:TRACEPILOT_DATA_DIR="D:\TracePilotData"`。备份时请先停止后端，再备份完整 `.data` 目录；不要删除该目录。Recording、API Asset、Semantic Case、Execution Plan 分别存储。批准的 Case/Plan/资产版本不可覆盖；修改需增加版本并重新审核。同一 Case 版本可预先声明多个 `planVersions`，再逐个批准对应计划。每个运行报告记录精确的 Case 和 Plan 版本。原始录制不可变，重新分析不会覆盖证据。
 
 默认 MockAIProvider。真实 OpenAI 兼容接口通过 `AI_ENDPOINT`（完整 chat completions HTTPS URL）、`AI_MODEL` 和 `AI_API_KEY` 配置；敏感值仅在服务端环境中提供。Provider 限制两次生成尝试，设置请求超时并用正式 Zod Schema 校验两个产物；模型输出仍为草稿。回归执行不会调用模型。
 
 API 文档：后端 `/docs`。请求示例见 [API 使用说明](docs/api.md)。设计、安全边界和当前限制见 [架构说明](docs/architecture.md)。
 
 这是单用户本地开发平台，API 绑定 loopback。尚未提供多用户认证、远程浏览器桌面、安全凭证保险库或生产部署方案；不要直接将后端暴露至公网。
+
+工作区支持删除：点击工作区旁的“删除”并确认。工作区入口会移除，但已有用例、计划、草稿、录制和报告仍保留在数据库中，可从“全部工作区”查看。有正在进行的录制时需先停止录制。
