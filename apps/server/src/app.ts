@@ -66,8 +66,18 @@ export async function createApp(store = new Store()) {
   });
   app.get("/api/environments", async () => store.latest("environment"));
   app.get("/api/auth-profiles", async () => store.latest("auth"));
-  app.post("/api/environments", async (req) => {
+  app.post("/api/environments", async (req, reply) => {
     const data = environmentSchema.parse(req.body);
+    const { createOnly } = z
+      .object({ createOnly: z.boolean().optional() })
+      .parse(req.body);
+    if (createOnly && (await store.get("environment", data.id)))
+      return reply
+        .code(409)
+        .send({
+          error:
+            "此环境名称 / 标识已存在，请使用其他名称；编辑已有配置请使用保存配置。",
+        });
     const versions = await store.list<Environment>("environment");
     const version = versions.filter((v) => v.id === data.id).length + 1;
     await store.put("environment", data.id, version, data);

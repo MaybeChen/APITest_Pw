@@ -84,3 +84,9 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 仅选择此环境的录制 BrowserContext 和回放 BrowserContext（包括关联的 APIRequestContext）忽略证书错误；其他环境仍保持默认校验。该开关作用于该环境的整个浏览器上下文，因此应限制 `allowedOrigins`；不会移除目标 origin 校验，也不会改变 AI Provider、依赖安装或全局 Node TLS 设置。修改后需重新创建录制会话。将字段恢复为 `false` 可重新启用校验。
 
 环境及 UI AuthProfile 的 GET 列表对每个 ID 只返回最新已保存版本，历史修订仍保留在 SQLite 中。默认数据库路径固定为项目根目录 `.data/platform.db`，可通过 `TRACEPILOT_DATA_DIR` 指定其他持久化目录。
+
+## 手动新增环境
+
+打开“环境配置 → 新增环境”，填写自定义的环境名称 / 标识和站点基础地址即可创建，不限于 `demo` 或 `my-test`。额外允许访问的地址用于登录跳转或独立 API 域名，可换行或逗号分隔，基础地址的 origin 自动加入允许列表。写操作、高风险操作和忽略 HTTPS 证书错误默认关闭。保存后自动选择新环境，录制页下拉列表立即可用；重启后仍保留。
+
+表单提交 `POST /api/environments` 时附带 `createOnly: true`，名称重复返回 409，不覆盖已有配置。原有“保存配置”仍可更新选中环境的 JSON。取消新增不会写入数据库。

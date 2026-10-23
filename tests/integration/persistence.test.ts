@@ -140,3 +140,42 @@ it("removes a workspace persistently and preserves approved cases and drafts", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("creates arbitrary environments and rejects duplicate create requests without changing saved configuration", async () => {
+  const store = new Store("file::memory:");
+  const app = await createApp(store);
+  try {
+    const environment = {
+      ...demoEnv,
+      id: "a-custom-environment",
+      baseURL: "https://custom.example.test",
+      allowedOrigins: ["https://custom.example.test"],
+    };
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/environments",
+          payload: { ...environment, createOnly: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/environments",
+          payload: {
+            ...environment,
+            baseURL: "https://different.example.test",
+            createOnly: true,
+          },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(await store.get("environment", environment.id)).toEqual(environment);
+    expect((await store.list("environment")).length).toBe(2);
+  } finally {
+    await app.close();
+  }
+});

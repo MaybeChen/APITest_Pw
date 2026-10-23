@@ -108,3 +108,66 @@ test("deletes a workspace after confirmation and keeps it deleted after reload",
   await page.reload();
   await expect(remove).toHaveCount(0);
 });
+
+test("creates a custom environment using the form without overwriting an existing name", async ({
+  page,
+  request,
+}) => {
+  const id = "manual-env-" + Date.now();
+  await page.goto("/");
+  await page.getByRole("button", { name: /环境配置/ }).click();
+  await page.getByRole("button", { name: "新增环境", exact: true }).click();
+  const form = page.getByRole("form", { name: "新增环境表单" });
+  await form.getByLabel("环境名称 / 标识").fill(id);
+  await form
+    .getByLabel("站点基础地址")
+    .fill("https://custom.example.test:38443");
+  await form
+    .getByLabel("额外允许访问的地址")
+    .fill("https://login.example.test/path");
+  await form.getByRole("button", { name: "保存新环境" }).click();
+  await expect(form.getByRole("alert")).toContainText("不能包含路径");
+  await form
+    .getByLabel("额外允许访问的地址")
+    .fill("https://login.example.test\nhttps://api.example.test");
+  await form.getByLabel("忽略此环境的 HTTPS 证书错误").check();
+  await form.getByRole("button", { name: "保存新环境" }).click();
+  await expect(
+    page.getByText(`环境“${id}”已创建并保存，可在录制页选择。`),
+  ).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
+    id,
+  );
+  await page.reload();
+  await page.getByRole("button", { name: /环境配置/ }).click();
+  await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
+    id,
+  );
+  const saved = (await (await request.get("/api/environments")).json()).find(
+    (e: { id: string }) => e.id === id,
+  );
+  expect(saved.allowedOrigins).toEqual([
+    "https://custom.example.test:38443",
+    "https://login.example.test",
+    "https://api.example.test",
+  ]);
+  expect(saved.allowWrites).toBe(false);
+  expect(saved.allowHighRisk).toBe(false);
+  expect(saved.ignoreHTTPSErrors).toBe(true);
+  await page.getByRole("button", { name: "新增环境", exact: true }).click();
+  await form.getByLabel("环境名称 / 标识").fill(id);
+  await form.getByLabel("站点基础地址").fill("https://different.example.test");
+  await form.getByRole("button", { name: "保存新环境" }).click();
+  await expect(form.getByRole("alert")).toContainText("已存在");
+  expect(
+    (await (await request.get("/api/environments")).json()).find(
+      (e: { id: string }) => e.id === id,
+    ),
+  ).toEqual(saved);
+  await form.getByRole("button", { name: "取消新增" }).click();
+  await expect(form).toHaveCount(0);
+  await page.getByRole("button", { name: /浏览器录制/ }).click();
+  await expect(page.getByRole("combobox", { name: "执行环境" })).toHaveValue(
+    id,
+  );
+});

@@ -10,6 +10,7 @@ import type {
   AuthProfile,
 } from "../../../packages/contracts/src/index";
 import "./style.css";
+import { EnvironmentForm } from "./components/EnvironmentForm";
 type Bundle = { testCase: TestCase; plan: Plan; assets: Asset[] };
 async function api<T>(
   path: string,
@@ -66,6 +67,7 @@ function App() {
     [view, setView] = useState("语义用例"),
     [selection, setSelection] = useState(""),
     [configText, setConfigText] = useState(""),
+    [creatingEnvironment, setCreatingEnvironment] = useState(false),
     [configKind, setConfigKind] = useState(() =>
       preference("tracepilot.configKind", "environments"),
     ),
@@ -1018,6 +1020,16 @@ function App() {
             </p>
             <div className="toolbar">
               <button
+                disabled={busy}
+                onClick={() => {
+                  setError("");
+                  setNotice("");
+                  setCreatingEnvironment(true);
+                }}
+              >
+                新增环境
+              </button>
+              <button
                 className="secondary"
                 onClick={() =>
                   void task(async () => {
@@ -1042,6 +1054,24 @@ function App() {
                 编辑 UI AuthProfile
               </button>
             </div>
+            {creatingEnvironment && (
+              <EnvironmentForm
+                onCancel={() => setCreatingEnvironment(false)}
+                onCreate={async (environment) => {
+                  const saved = await api<Environment>("/environments", {
+                    ...environment,
+                    createOnly: true,
+                  });
+                  await refresh();
+                  setConfigKind("environments");
+                  setConfigDirty(false);
+                  setConfigId(saved.id);
+                  setEnvironmentRef(saved.id);
+                  setCreatingEnvironment(false);
+                  setNotice(`环境“${saved.id}”已创建并保存，可在录制页选择。`);
+                }}
+              />
+            )}
             <label>
               已保存配置
               <select
