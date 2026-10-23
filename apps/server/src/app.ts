@@ -59,6 +59,7 @@ export async function createApp(store = new Store()) {
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+        "http://10.136.122.46:5173",
       ].includes(origin)
     )
       return reply.code(403).send({ error: "Untrusted origin" });
