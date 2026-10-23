@@ -135,7 +135,11 @@ export const recordingSchema = z.object({
   requests: z.array(network),
   contextSnapshots: z.array(contextSnapshotSchema).optional(),
   contextCapture: z
-    .object({ omittedSnapshots: z.number().nonnegative() })
+    .object({
+      omittedSnapshots: z.number().nonnegative(),
+      initializedFrames: z.number().int().nonnegative().optional(),
+      rejectedEvents: z.number().int().nonnegative().optional(),
+    })
     .optional(),
   dependencies: z
     .array(

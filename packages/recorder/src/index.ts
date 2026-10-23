@@ -2,6 +2,7 @@ import {
   recordingSchema,
   contextSnapshotSchema,
 } from "../../contracts/src/index.js";
+import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import {
   chromium,
@@ -47,7 +48,11 @@ export class Recorder {
       operations: [],
       requests: [],
       contextSnapshots: [],
-      contextCapture: { omittedSnapshots: 0 },
+      contextCapture: {
+        omittedSnapshots: 0,
+        initializedFrames: 0,
+        rejectedEvents: 0,
+      },
       dependencies: [],
       redactions: [
         "Credentials, sensitive fields and query parameters redacted before persistence.",
@@ -75,11 +80,23 @@ export class Recorder {
     });
     await this.context.exposeBinding("__record", (_source, event: unknown) => {
       if (this.stopping) return;
+      if (
+        event &&
+        typeof event === "object" &&
+        "recorderReady" in event &&
+        event.recorderReady === true
+      ) {
+        this.recording.contextCapture!.initializedFrames!++;
+        return;
+      }
       if (event && typeof event === "object" && "snapshot" in event) {
         const parsed = contextSnapshotSchema.safeParse(
           (event as { snapshot: unknown }).snapshot,
         );
-        if (!parsed.success) return;
+        if (!parsed.success) {
+          this.recording.contextCapture!.rejectedEvents!++;
+          return;
+        }
         const safe = redact(parsed.data);
         const size = Buffer.byteLength(JSON.stringify(safe));
         if (
@@ -94,144 +111,14 @@ export class Recorder {
         return;
       }
       const parsed = recordingSchema.shape.operations.element.safeParse(event);
+      if (!parsed.success) this.recording.contextCapture!.rejectedEvents!++;
       if (parsed.success && this.recording.operations.length < 10000)
         this.recording.operations.push(redact(parsed.data));
     });
-    await this.context.addInitScript(() => {
-      const send = (event: unknown) =>
-        void (
-          window as unknown as { __record: (e: unknown) => Promise<void> }
-        ).__record(event);
-      const safeText = (element: Element) => {
-        const copy = element.cloneNode(true) as Element;
-        copy
-          .querySelectorAll("input,textarea,select,script,style")
-          .forEach((el) => el.remove());
-        return copy.textContent ?? "";
-      };
-      const snapshot = (
-        operationId: string,
-        phase: "BEFORE" | "AFTER",
-        target: HTMLElement | null,
-      ) => {
-        const region =
-          target?.closest('form,[role="dialog"],dialog,section,main') ??
-          target?.parentElement ??
-          document.body;
-        const visible = (element: Element) =>
-          element instanceof HTMLElement &&
-          !!(
-            element.offsetWidth ||
-            element.offsetHeight ||
-            element.getClientRects().length
-          );
-        const describe = (element: Element) => {
-          const field =
-            element instanceof HTMLInputElement ||
-            element instanceof HTMLTextAreaElement ||
-            element instanceof HTMLSelectElement;
-          const sensitive =
-            field &&
-            /password|token|secret|card|cvv/i.test(
-              element.getAttribute("name") ?? "",
-            );
-          return {
-            tag: element.tagName,
-            role: element.getAttribute("role") ?? undefined,
-            label: sensitive
-              ? "[REDACTED]"
-              : (element.getAttribute("aria-label")?.slice(0, 100) ??
-                undefined),
-            text: field ? undefined : safeText(element).slice(0, 120),
-            name: element.getAttribute("name")?.slice(0, 100) ?? undefined,
-            type: element.getAttribute("type") ?? undefined,
-            disabled: element.hasAttribute("disabled"),
-            expanded: element.getAttribute("aria-expanded") ?? undefined,
-          };
-        };
-        send({
-          snapshot: {
-            id: crypto.randomUUID(),
-            operationId,
-            phase,
-            at: Date.now(),
-            url: location.href,
-            title: document.title.slice(0, 160),
-            headings: Array.from(
-              document.querySelectorAll('h1,h2,[role="heading"]'),
-            )
-              .filter(visible)
-              .slice(0, 6)
-              .map((el) => safeText(el).slice(0, 120)),
-            region: {
-              tag: region?.tagName ?? "BODY",
-              role: region?.getAttribute("role") ?? undefined,
-              label:
-                region?.getAttribute("aria-label")?.slice(0, 100) ?? undefined,
-            },
-            elements: Array.from(
-              region?.querySelectorAll(
-                'button,a,label,h1,h2,input,textarea,select,[role="button"]',
-              ) ?? [],
-            )
-              .filter(visible)
-              .slice(0, 24)
-              .map(describe),
-          },
-        });
-      };
-      const emit = (type: string, target?: EventTarget | null) => {
-        const el = target instanceof HTMLElement ? target : null;
-        const sensitive =
-          el instanceof HTMLInputElement &&
-          (el.type === "password" ||
-            /password|token|secret|card/i.test(el.name));
-        const context = {
-          tag: el?.tagName,
-          role: el?.getAttribute("role"),
-          accessibleName: el?.getAttribute("aria-label"),
-          text: sensitive
-            ? "[REDACTED]"
-            : el
-              ? safeText(el).slice(0, 160)
-              : undefined,
-          attributes: {
-            id: el?.id,
-            name: el?.getAttribute("name"),
-            type: el?.getAttribute("type"),
-          },
-          value: "[OMITTED]",
-          state: document.readyState,
-        };
-        const operationId = crypto.randomUUID();
-        if (["click", "change", "submit"].includes(type))
-          snapshot(operationId, "BEFORE", el);
-        send({
-          id: operationId,
-          type,
-          at: Date.now(),
-          url: location.href,
-          context,
-          requestIds: [],
-        });
-        if (
-          ["click", "change", "submit", "navigation", "stateChange"].includes(
-            type,
-          )
-        )
-          setTimeout(
-            () => snapshot(operationId, "AFTER", el?.isConnected ? el : null),
-            200,
-          );
-      };
-      for (const type of ["click", "input", "change", "submit"])
-        document.addEventListener(type, (e) => emit(type, e.target), true);
-      addEventListener("DOMContentLoaded", () => emit("navigation"));
-      let timer: ReturnType<typeof setTimeout>;
-      new MutationObserver(() => {
-        clearTimeout(timer);
-        timer = setTimeout(() => emit("stateChange"), 300);
-      }).observe(document, { subtree: true, childList: true });
+    // Load browser JavaScript directly: serializing a tsx-transformed callback
+    // can introduce references to Node-side helpers such as __name.
+    await this.context.addInitScript({
+      path: fileURLToPath(new URL("./browser-recorder.js", import.meta.url)),
     });
     const ids = new Map<Request, string>();
     this.context.on("request", (req) => {

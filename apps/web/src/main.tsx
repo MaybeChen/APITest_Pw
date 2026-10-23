@@ -537,6 +537,24 @@ function App() {
                     )}
                   </div>
                 </div>
+                <p>
+                  已录制 {recording.operations.length} 个操作、
+                  {recording.contextSnapshots?.length ?? 0} 份页面摘要；脚本就绪{" "}
+                  {recording.contextCapture?.initializedFrames ?? "未记录"}{" "}
+                  个页面/框架。
+                </p>
+                {!recording.operations.length && (
+                  <p role="alert">
+                    尚未采集到页面操作。请在录制浏览器内操作后刷新事件；若仍为
+                    0，请检查后端版本并重新录制。
+                  </p>
+                )}
+                {!!recording.contextCapture?.rejectedEvents && (
+                  <p role="alert">
+                    有 {recording.contextCapture.rejectedEvents}{" "}
+                    条上下文事件未通过校验。
+                  </p>
+                )}
                 <h3>操作时间线</h3>
                 {recording.operations.map((o) => (
                   <details key={o.id}>

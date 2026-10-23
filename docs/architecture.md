@@ -57,3 +57,5 @@ allowedOrigins 支持精确 origin 字符串和 hostnameRegex 对象规则，任
 Plan 支持 `execution.maxConcurrency`（1–8，默认 1）、节点 `parallelSafe` 与 `resourceLocks`。仅明确标记且资产为 READ 的 GET/HEAD API 节点可并行；SETUP、写操作、清理保持串行。共享锁互斥，汇合节点等待全部依赖完成；失败依赖的下游不执行。读操作需要 UI 重新认证时强制串行。无论业务调度是否失败，仍进入串行清理阶段。
 
 RESPONSE_VARIABLE 可声明 `fromStep`、`expectedType`，生产节点通过 `extract` 和 `extractTypes` 给出路径与类型。`bodyBindings` 支持嵌套 JSON 路径，禁止原型属性；运行时检查提取和绑定类型。校验器检查来源节点、上游依赖、声明类型及语义依赖。界面显示 DAG、参数绑定和页面证据，细节可在 JSON 编辑中修改。
+
+浏览器录制脚本独立存放于 `packages/recorder/src/browser-recorder.js`，通过 Playwright `addInitScript({path})` 加载，不序列化经 tsx 转换的 TypeScript 回调，避免 `__name` 等 Node 侧编译辅助函数在页面中缺失。脚本覆盖同一 BrowserContext 内的页面、iframe 和弹窗；`contextCapture.initializedFrames` 记录页面/框架脚本就绪次数（包含刷新），`rejectedEvents` 记录未通过数据校验的事件数。录制界面展示操作、页面摘要数量与就绪次数，空操作时提示检查。刷新/关闭中的绑定失效不会产生未处理 Promise 错误。
