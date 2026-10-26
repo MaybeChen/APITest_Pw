@@ -373,3 +373,49 @@ footer {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.generation {
+  border: 1px solid #dfe6de;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 18px 0;
+}
+.generation-summary {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  margin: 15px 0;
+}
+.generation progress {
+  width: 100%;
+  height: 10px;
+  accent-color: #236958;
+}
+.generation-stages {
+  list-style: none;
+  padding: 0;
+}
+.generation-stage {
+  padding: 10px 14px;
+  margin: 8px 0;
+  border-left: 4px solid #d5dfd8;
+  border-radius: 4px;
+}
+.generation-stage.running {
+  border-color: #267bba;
+  background: #eff7ff;
+}
+.generation-stage.succeeded {
+  border-color: #236958;
+}
+.generation-stage.failed {
+  border-color: #ae4434;
+}
+.generation-stage .row {
+  flex-wrap: wrap;
+}
+.dataset-editor {
+  width: 100%;
+  min-height: 230px;
+  font-family: monospace;
+}

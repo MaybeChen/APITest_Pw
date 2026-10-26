@@ -1,3 +1,4 @@
+import { Datasets } from "./components/Datasets";
 import { GenerationProgress } from "./components/GenerationProgress";
 import { Workflow } from "./components/Workflow";
 import React, { useState, useEffect } from "react";
@@ -389,7 +390,10 @@ function App() {
                                 查看 Plan v{p.version}
                               </button>
                               <button
-                                disabled={busy}
+                                disabled={
+                                  busy ||
+                                  Object.keys(p.parameters ?? {}).length > 0
+                                }
                                 onClick={() => runPlan(p)}
                               >
                                 回放 v{p.version}
@@ -539,7 +543,8 @@ function App() {
                 </div>
                 <p>
                   已录制 {recording.operations.length} 个操作、
-                  {recording.contextSnapshots?.length ?? 0} 份页面摘要；脚本就绪{" "}
+                  {recording.contextSnapshots?.length ??
+                    0} 份页面摘要；脚本就绪{" "}
                   {recording.contextCapture?.initializedFrames ?? "未记录"}{" "}
                   个页面/框架。
                 </p>
@@ -796,6 +801,7 @@ function App() {
                 ) : view === "执行计划" ? (
                   <>
                     <Workflow plan={bundle.plan} />
+
                     <p>
                       环境 {bundle.plan.environmentRef} · UI 认证{" "}
                       {bundle.plan.authProfileRef} · Cleanup{" "}
@@ -871,7 +877,9 @@ function App() {
                             JSON.stringify(b.testCase.steps) !==
                               JSON.stringify(bundle.testCase.steps) ||
                             JSON.stringify(b.plan.steps) !==
-                              JSON.stringify(bundle.plan.steps)
+                              JSON.stringify(bundle.plan.steps) ||
+                            JSON.stringify(b.plan.parameters) !==
+                              JSON.stringify(bundle.plan.parameters)
                           ) {
                             b.testCase.status = "DRAFT";
                             b.plan.status = "DRAFT";
@@ -901,6 +909,26 @@ function App() {
                     </button>
                   </>
                 )}
+                <Datasets
+                  key={`${bundle.plan.planId}:${bundle.plan.version}`}
+                  plan={bundle.plan}
+                  busy={busy}
+                  onChange={(plan) =>
+                    edit({
+                      ...bundle,
+                      plan,
+                      testCase: { ...bundle.testCase, status: "DRAFT" },
+                    })
+                  }
+                  onReports={(results) => {
+                    setReport(results[0]);
+                    setReports((all) => [...results, ...all]);
+                    setTab("运行报告");
+                    setNotice(
+                      `已执行 ${results.length} 组数据，通过 ${results.filter((r) => r.status === "PASSED").length} 组。`,
+                    );
+                  }}
+                />
                 <div className="toolbar">
                   <button
                     className="secondary"
@@ -993,7 +1021,10 @@ function App() {
                   </button>
                   {bundle.plan.status === "APPROVED" && (
                     <button
-                      disabled={busy}
+                      disabled={
+                        busy ||
+                        Object.keys(bundle.plan.parameters ?? {}).length > 0
+                      }
                       onClick={() => runPlan(bundle.plan)}
                     >
                       执行回放
@@ -1032,6 +1063,7 @@ function App() {
                     });
                   }}
                 >
+                  {r.dataset && `${r.dataset.rowName} · `}
                   {r.status} · {new Date(r.startedAt).toLocaleString()}
                 </button>
               ))}
@@ -1048,6 +1080,12 @@ function App() {
                   <span>{report.endedAt - report.startedAt} ms</span>
                 </div>
                 <p>
+                  {report.dataset && (
+                    <>
+                      数据组：{report.dataset.rowName} · 数据集 v
+                      {report.dataset.version} ·{" "}
+                    </>
+                  )}
                   UI 登录：{report.auth.status} {report.auth.error} · 清理：
                   {report.cleanupStatus}
                 </p>

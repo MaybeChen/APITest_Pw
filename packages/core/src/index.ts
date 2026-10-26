@@ -9,6 +9,7 @@ import {
   type Asset,
   type Environment,
   type Binding,
+  type Dataset,
 } from "../../contracts/src/index.js";
 const sensitive =
   /password|passwd|secret|cookie|authorization|token|csrf|signature|credit.?card|cardnumber|cvv|api.?key/i;
@@ -19,6 +20,7 @@ export function redact(value: unknown, key = ""): any {
       typeof value === "object" &&
       "source" in value &&
       [
+        "TEST_DATA",
         "ENVIRONMENT_VARIABLE",
         "AUTH_CONTEXT",
         "RESPONSE_VARIABLE",
@@ -177,8 +179,13 @@ export function resolve(
   b: Binding,
   vars: Record<string, unknown>,
   auth: Record<string, string> = {},
+  data: Record<string, unknown> = {},
 ): unknown {
   switch (b.source) {
+    case "TEST_DATA":
+      if (!Object.hasOwn(data, b.name))
+        throw new Error(`Missing test data ${b.name}`);
+      return structuredClone(data[b.name]);
     case "STATIC":
       return b.value;
     case "RESPONSE_VARIABLE":
@@ -314,6 +321,11 @@ export function validate(
       ...Object.values(s.bodyBindings ?? {}),
       ...(s.body ? [s.body] : []),
     ]) {
+      if (
+        b.source === "TEST_DATA" &&
+        !Object.hasOwn(p.parameters ?? {}, b.name)
+      )
+        errors.push(`Undeclared test data parameter: ${b.name}`);
       if (b.source === "MANUAL_REVIEW") errors.push("Unresolved header");
       if (b.source === "RESPONSE_VARIABLE") {
         const producer = producers.get(b.name);
@@ -376,6 +388,18 @@ export function validate(
       errors.push("Sensitive static body must use a runtime reference");
     for (const a of s.assertions) {
       if (
+        a.dataRef &&
+        (!Object.hasOwn(p.parameters ?? {}, a.dataRef) || a.operator !== "eq")
+      )
+        errors.push(`Invalid assertion data parameter: ${a.dataRef}`);
+      if (
+        a.kind === "status" &&
+        a.dataRef &&
+        p.parameters?.[a.dataRef] !== "number"
+      )
+        errors.push("Status data parameter must be a number");
+      if (
+        !a.dataRef &&
         a.kind === "status" &&
         (a.operator !== "eq" ||
           typeof a.value !== "number" ||
@@ -384,7 +408,12 @@ export function validate(
           a.value > 599)
       )
         errors.push("Status assertion must compare an HTTP status");
-      if (a.kind === "json" && a.operator === "eq" && a.value === undefined)
+      if (
+        a.kind === "json" &&
+        a.operator === "eq" &&
+        !a.dataRef &&
+        a.value === undefined
+      )
         errors.push("JSON equality requires expected value");
       if (a.kind === "json" && !a.path)
         errors.push("JSON assertion requires path");
@@ -421,4 +450,36 @@ export function validate(
       errors.push("Fixture requires cleanup");
   }
   return [...new Set(errors)];
+}
+
+// Validate the entire dataset before any browser or request is started.
+export function validateDataset(plan: Plan, dataset: Dataset): void {
+  if (dataset.planId !== plan.planId || dataset.planVersion !== plan.version)
+    throw new Error("Dataset plan/version mismatch");
+  for (const row of dataset.rows) {
+    for (const [name, type] of Object.entries(plan.parameters ?? {})) {
+      if (
+        !Object.hasOwn(row.values, name) ||
+        valueKind(row.values[name]) !== type
+      )
+        throw new Error(
+          `Dataset row ${row.id}: missing or invalid parameter ${name} (${type})`,
+        );
+    }
+    for (const name of Object.keys(row.values))
+      if (!Object.hasOwn(plan.parameters ?? {}, name))
+        throw new Error(`Dataset row ${row.id}: undeclared parameter ${name}`);
+    for (const step of plan.steps)
+      for (const assertion of step.assertions)
+        if (assertion.kind === "status" && assertion.dataRef) {
+          const status = row.values[assertion.dataRef];
+          if (
+            typeof status !== "number" ||
+            !Number.isInteger(status) ||
+            status < 100 ||
+            status > 599
+          )
+            throw new Error(`Dataset row ${row.id}: invalid HTTP status`);
+        }
+  }
 }

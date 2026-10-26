@@ -1,6 +1,11 @@
 import { schedule } from "./scheduler.js";
 import { existsSync } from "node:fs";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "playwright";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
@@ -11,6 +16,7 @@ import type {
   Environment,
   Report,
   StepResult,
+  Dataset,
 } from "../../contracts/src/index.js";
 import {
   allowedURL,
@@ -21,6 +27,7 @@ import {
   validate,
   setAtPath,
   valueKind,
+  validateDataset,
 } from "../../core/src/index.js";
 export async function uiAuthenticate(
   context: BrowserContext,
@@ -100,11 +107,20 @@ export async function run(
   assets: Asset[],
   env: Environment,
   authProfile: AuthProfile,
+  testData: Record<string, unknown> = {},
 ): Promise<Report> {
   const errors = validate(c, p, assets, env, true);
   if (errors.length) throw new Error(errors.join("; "));
   if (p.authProfileRef !== authProfile.id)
     throw new Error("Auth profile mismatch");
+  validateDataset(p, {
+    id: "single",
+    name: "single",
+    version: 1,
+    planId: p.planId,
+    planVersion: p.version,
+    rows: [{ id: "single", name: "single", values: testData }],
+  });
   const report: Report = {
     semanticSteps: structuredClone(c.steps),
     environmentSnapshot: structuredClone(env),
@@ -126,13 +142,14 @@ export async function run(
   const fixtures = new FixtureManager(report.id),
     vars: Record<string, unknown> = {};
   let context: BrowserContext | undefined;
-  const browser = await chromium.launch({
-    headless: process.env.RUN_HEADLESS !== "false",
-    executablePath:
-      process.env.CHROMIUM_PATH ??
-      (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
-  });
+  let browser: Browser | undefined;
   try {
+    browser = await chromium.launch({
+      headless: process.env.RUN_HEADLESS !== "false",
+      executablePath:
+        process.env.CHROMIUM_PATH ??
+        (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
+    });
     context = await browser.newContext({
       ignoreHTTPSErrors: env.ignoreHTTPSErrors ?? false,
     });
@@ -185,11 +202,11 @@ export async function run(
         for (const [key, b] of Object.entries(step.path))
           path = path.replace(
             `{${key}}`,
-            encodeURIComponent(String(resolve(b, vars, auth))),
+            encodeURIComponent(String(resolve(b, vars, auth, testData))),
           );
         const url = new URL(path, env.baseURL);
         for (const [k, b] of Object.entries(step.query))
-          url.searchParams.set(k, String(resolve(b, vars, auth)));
+          url.searchParams.set(k, String(resolve(b, vars, auth, testData)));
         allowedURL(url.href, env);
         if (step.requiresOwnership)
           fixtures.assertOwned(
@@ -201,12 +218,14 @@ export async function run(
           ...authProfile.headers,
           ...step.headers,
         })) {
-          const value = resolve(b, vars, auth);
+          const value = resolve(b, vars, auth, testData);
           if (value !== undefined) headers[k] = String(value);
         }
-        let body = step.body ? resolve(step.body, vars, auth) : undefined;
+        let body = step.body
+          ? resolve(step.body, vars, auth, testData)
+          : undefined;
         for (const [path, binding] of Object.entries(step.bodyBindings ?? {}))
-          body = setAtPath(body, path, resolve(binding, vars, auth));
+          body = setAtPath(body, path, resolve(binding, vars, auth, testData));
         result.request = redact({
           url: url.href,
           method: a.method,
@@ -237,7 +256,7 @@ export async function run(
                 ...authProfile.headers,
                 ...step.headers,
               })) {
-                const value = resolve(b, vars, auth);
+                const value = resolve(b, vars, auth, testData);
                 if (value !== undefined) headers[k] = String(value);
               }
               continue;
@@ -290,15 +309,18 @@ export async function run(
               assertion.kind === "status"
                 ? response.status()
                 : atPath(data, assertion.path!);
+            const expected = assertion.dataRef
+              ? testData[assertion.dataRef]
+              : assertion.value;
             return {
-              expected: assertion,
+              expected: redact({ ...assertion, value: expected }),
               actual: redact(actual),
               passed:
                 assertion.operator === "exists"
                   ? actual !== undefined
                   : assertion.operator === "notExists"
                     ? actual === undefined
-                    : isDeepStrictEqual(actual, assertion.value),
+                    : isDeepStrictEqual(actual, expected),
             };
           });
           if (result.assertions.every((a) => a.passed)) {
@@ -335,7 +357,7 @@ export async function run(
     report.auth = { status: "FAILED", error: String(redact(String(e))) };
   } finally {
     await context?.close();
-    await browser.close();
+    await browser?.close();
     report.resources = fixtures.resources;
     report.residualResources = fixtures.resources
       .filter((r) => !r.cleaned)
@@ -355,4 +377,32 @@ export async function run(
         : "FAILED";
   }
   return redact(report);
+}
+
+export async function runDataset(
+  c: TestCase,
+  p: Plan,
+  assets: Asset[],
+  env: Environment,
+  authProfile: AuthProfile,
+  dataset: Dataset,
+  save: (report: Report) => Promise<void> = async () => {},
+): Promise<Report[]> {
+  validateDataset(p, dataset);
+  const batchId = randomUUID();
+  const reports: Report[] = [];
+  for (const row of dataset.rows) {
+    // Each row uses a fresh browser, auth context, response variables and resource ledger.
+    const report = await run(c, p, assets, env, authProfile, row.values);
+    report.dataset = {
+      id: dataset.id,
+      version: dataset.version,
+      rowId: row.id,
+      rowName: row.name,
+    };
+    report.batchId = batchId;
+    await save(report);
+    reports.push(report);
+  }
+  return reports;
 }

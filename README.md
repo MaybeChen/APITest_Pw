@@ -75,3 +75,5 @@ pnpm ai:check --config config/ai.json
 当前 `config/ai.json` 已开启 logging：后端终端会打印 `[ai]` 输入/输出日志，同时写入项目 `.data/logs/model.jsonl`。包含脱敏输入、响应、耗时、调用 ID、重试序号和 JSON/Schema 校验错误；不记录认证头。默认每条数据最多 64000 字符并标记截断，日志文件达到 10 MiB 后轮转。设置 `logging.enabled=false` 关闭，或 `logging.console=false` 仅保留文件。修改后重启后端；也适用于 `pnpm ai:check` 的最小测试消息。配置详见 docs/api.md。
 
 执行计划支持显式 DAG 依赖、`bodyBindings` 嵌套参数传递及变量类型检查。默认串行；配置 `execution.maxConcurrency` 并明确标记 `parallelSafe` 后，独立 GET/HEAD 只读节点可并发，`resourceLocks` 控制互斥。执行计划页显示依赖图和参数绑定表，字段可通过 JSON 编辑。录制保存操作前后受限的页面语义摘要，在请求详情中查看候选上下文。
+
+生成工作流界面展示中文阶段、当前进度、阶段及总耗时、尝试次数、可展开产物与校验错误；服务重启后的中断任务可继续执行。用例编辑页的“测试数据集”支持从草稿提取业务参数，将数据与调用步骤分开保存。一份已批准计划可选择多组数据逐组回放，每组独立认证、清理并生成报告；测试数据变化无需重新生成或批准计划。参数绑定和 API 示例见 [API 使用说明](docs/api.md#同一调用流程执行多组测试数据)。

@@ -328,6 +328,9 @@ test("restores staged generation progress and opens its workflow draft", async (
       json: [
         {
           id: "saved-generation",
+          provider: { name: "TestProvider", version: "1" },
+          createdAt: 1000,
+          updatedAt: 3000,
           state: "NEEDS_REVIEW",
           stages: [
             {
@@ -340,7 +343,10 @@ test("restores staged generation progress and opens its workflow draft", async (
           ],
           testCase: bundle.testCase,
           plan: bundle.plan,
-          input: { assets: bundle.assets },
+          input: {
+            assets: bundle.assets,
+            recording: { caseName: bundle.testCase.name },
+          },
         },
       ],
     }),
@@ -350,11 +356,93 @@ test("restores staged generation progress and opens its workflow draft", async (
   await expect(
     page.getByRole("heading", { name: "生成工作流", exact: true }),
   ).toBeVisible();
-  await page.getByText("saved-ge · NEEDS_REVIEW").click();
+  await expect(page.getByText("生成完成，等待审核")).toBeVisible();
   await page.getByRole("button", { name: "打开草稿", exact: true }).click();
   await page.getByRole("button", { name: "执行计划", exact: true }).click();
   await expect(page.getByRole("img", { name: "接口依赖工作流" })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "参数传递", exact: true }),
   ).toBeVisible();
+});
+
+test("extracts test data and replays one approved workflow with two datasets rows", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "载入订单演示模板" }).click();
+  await page.getByRole("button", { name: "从流程提取测试数据" }).click();
+  const editor = page.getByLabel("数据组（JSON 数组）");
+  const original = JSON.parse(await editor.inputValue());
+  const second = structuredClone(original[0]);
+  second.id = "row-2";
+  second.name = `第二组订单-${Date.now()}`;
+  second.values.setup_body.name = "第二组订单";
+  await editor.fill(JSON.stringify([...original, second]));
+  // Switching editor views must preserve the extracted data.
+  await page.getByRole("button", { name: "执行计划", exact: true }).click();
+  expect(JSON.parse(await editor.inputValue())).toHaveLength(2);
+  await page.getByRole("button", { name: "我已审查预期、断言与资产" }).click();
+  await page.getByRole("button", { name: "批准并保存版本" }).click();
+  await expect(
+    page.getByText("该版本已批准并以不可覆盖记录保存。"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "执行全部数据组" }).click();
+  await expect(page.getByText("已执行 2 组数据，通过 2 组。")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect(
+    page.getByRole("button", { name: new RegExp(`${second.name} · PASSED`) }),
+  ).toBeVisible();
+  await expect(page.getByText("运行级资源台账 · 残留 0")).toBeVisible();
+});
+
+test("shows generation stage, elapsed time, artifacts and recoverable errors", async ({
+  page,
+}) => {
+  await page.route("**/api/generations", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "failed-job",
+          state: "FAILED",
+          active: false,
+          createdAt: Date.now() - 5000,
+          updatedAt: Date.now(),
+          provider: { name: "TestProvider", version: "1" },
+          input: { recording: { caseName: "生成界面测试" } },
+          error: "模型连接失败，请重试",
+          stages: [
+            {
+              id: "EVIDENCE",
+              state: "SUCCEEDED",
+              startedAt: 1000,
+              endedAt: 2500,
+              attempts: 1,
+              output: { requestIds: ["req-1"] },
+            },
+            {
+              id: "BUSINESS_FLOW",
+              state: "FAILED",
+              startedAt: 2500,
+              endedAt: 3000,
+              attempts: 2,
+              error: "连接超时",
+            },
+            { id: "SEMANTIC_CASE", state: "PENDING", attempts: 0 },
+          ],
+        },
+      ],
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "分析与筛选" }).click();
+  await expect(page.getByText("当前阶段：识别业务流程")).toBeVisible();
+  await expect(page.getByText("总耗时：5.0 秒")).toBeVisible();
+  await expect(page.getByText("进度：1 / 3")).toBeVisible();
+  await expect(page.getByText("连接超时", { exact: true })).toBeVisible();
+  await page.getByText("查看阶段产物").click();
+  await expect(page.getByText(/req-1/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "继续未完成阶段" }),
+  ).toBeEnabled();
 });

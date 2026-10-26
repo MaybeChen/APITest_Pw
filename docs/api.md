@@ -212,3 +212,52 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 - `POST /api/generate`：兼容同步调用，内部执行同一工作流，返回 `{testCase, plan, assets, workflow}`。
 
 生成状态为 RUNNING、FAILED、NEEDS_REVIEW；每次阶段变更存为独立 SQLite 修订。NEEDS_REVIEW 表示生成结束，仍可能有阻塞校验错误，必须修正并审核才能批准运行。每个模型阶段最多尝试两次；确定性校验后最多执行一个修复阶段。
+
+## 同一调用流程执行多组测试数据
+
+执行计划通过 `parameters` 声明数据类型，在 path/query/headers/body/bodyBindings 中使用 `{"source":"TEST_DATA","name":"order"}`。JSON 等值断言可以用 `dataRef` 指向预期值参数；状态码预期参数必须为 number 且为 100–599 的整数。响应提取仍使用 `RESPONSE_VARIABLE`，与测试数据保持隔离。
+
+```json
+{
+  "parameters": { "order": "object", "expectedName": "string" },
+  "body": { "source": "TEST_DATA", "name": "order" },
+  "assertion": {
+    "kind": "json",
+    "path": "$.name",
+    "operator": "eq",
+    "dataRef": "expectedName",
+    "basis": "USER",
+    "confirmed": true
+  }
+}
+```
+
+以上分别为计划字段、步骤 body 和步骤 assertions 中的一个断言示例。审批仍通过现有 `/api/approve`，数据变化无需重新批准流程。
+
+`POST /api/datasets` 独立保存数据集，绑定精确的已保存 Plan 版本；同一 id/version 不可覆盖。`GET /api/datasets` 返回所有已保存版本。数据组 id 必须唯一，每个数据集 1–100 组；执行前校验所有数据组，缺参数、类型错误、额外参数或版本不匹配均拒绝执行。
+
+```json
+{
+  "id": "orders",
+  "version": 1,
+  "name": "订单数据",
+  "planId": "case-plan",
+  "planVersion": 1,
+  "rows": [
+    {
+      "id": "a",
+      "name": "订单 A",
+      "values": { "order": { "name": "A" }, "expectedName": "A" }
+    },
+    {
+      "id": "b",
+      "name": "订单 B",
+      "values": { "order": { "name": "B" }, "expectedName": "B" }
+    }
+  ]
+}
+```
+
+`POST /api/run` 使用 `{"planId":"case-plan","version":1,"dataset":{"id":"orders","version":1}}` 返回 `{"reports":[...]}`。逐组串行执行，每组重新认证，隔离变量与资源台账，执行 ALWAYS 清理。一组断言失败后继续下一组；每组报告完成即持久化，记录 batchId、数据集 id/version、rowId/rowName。基础设施或报告保存异常会中止剩余批次，已保存报告仍保留。报告不额外保存整套数据集快照；请求与响应仍按既有脱敏规则保存。未传 dataset 的旧调用仍返回单份 Report；含必填参数的流程必须使用数据集。
+
+界面中可从草稿提取静态业务参数及 JSON 等值预期，审核并批准后保存数据集。可复制已有数据集修改，不必复制或再次生成调用流程。数据集是本地测试数据存储；认证凭证仍使用环境引用或 AuthProfile。

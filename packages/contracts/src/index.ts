@@ -18,6 +18,7 @@ export const valueType = z.enum([
 ]);
 export const binding = z.discriminatedUnion("source", [
   z.object({ source: z.literal("STATIC"), value: z.unknown() }),
+  z.object({ source: z.literal("TEST_DATA"), name: id }),
   z.object({
     source: z.literal("RESPONSE_VARIABLE"),
     name: id,
@@ -202,6 +203,7 @@ export const assertion = z.object({
   path: z.string().optional(),
   operator: z.enum(["eq", "exists", "notExists"]),
   value: z.unknown().optional(),
+  dataRef: id.optional(),
   basis: z.enum(["CONTRACT", "RECORDING", "USER"]),
   confirmed: z.boolean(),
 });
@@ -241,6 +243,7 @@ export const planSchema = z.object({
   authProfileRef: id,
   uiActions: z.array(action),
   steps: z.array(stepSchema).min(1),
+  parameters: z.record(z.string(), valueType).optional(),
   execution: z
     .object({ maxConcurrency: z.number().int().min(1).max(8) })
     .optional(),
@@ -308,6 +311,29 @@ export const environmentSchema = z.object({
   ignoreHTTPSErrors: z.boolean().default(false),
   recordingRequestDomains: z.array(requestDomainRuleSchema).optional(),
 });
+export const datasetSchema = z
+  .object({
+    id,
+    name: id,
+    planId: id,
+    planVersion: z.number().int().positive(),
+    version: z.number().int().positive(),
+    rows: z
+      .array(
+        z.object({
+          id,
+          name: id,
+          values: z.record(z.string(), z.unknown()),
+        }),
+      )
+      .min(1)
+      .max(100),
+  })
+  .refine(
+    (data) => new Set(data.rows.map((row) => row.id)).size === data.rows.length,
+    "Duplicate dataset row ID",
+  );
+export type Dataset = z.infer<typeof datasetSchema>;
 export type Recording = z.infer<typeof recordingSchema>;
 export type Asset = z.infer<typeof assetSchema>;
 export type TestCase = z.infer<typeof caseSchema>;
@@ -330,6 +356,8 @@ export interface StepResult {
   error?: string;
 }
 export interface Report {
+  dataset?: { id: string; version: number; rowId: string; rowName: string };
+  batchId?: string;
   semanticSteps?: TestCase["steps"];
   environmentSnapshot?: Environment;
   authProfileRef?: string;

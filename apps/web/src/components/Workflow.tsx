@@ -92,11 +92,14 @@ export function Workflow({ plan }: { plan: Plan }) {
                 key: `HEADER ${key}`,
                 value,
               })),
+              ...(step.body ? [{ key: "BODY $", value: step.body }] : []),
               ...Object.entries(step.bodyBindings ?? {}).map(
                 ([key, value]) => ({ key: `BODY ${key}`, value }),
               ),
             ]
-              .filter(({ value }) => value.source === "RESPONSE_VARIABLE")
+              .filter(({ value }) =>
+                ["RESPONSE_VARIABLE", "TEST_DATA"].includes(value.source),
+              )
               .map(({ key, value }) => (
                 <tr key={`${step.id}-${key}`}>
                   <td>{step.id}</td>

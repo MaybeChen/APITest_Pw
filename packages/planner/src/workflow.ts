@@ -146,6 +146,7 @@ export async function executeGeneration(
     if (stage.state === "SUCCEEDED") return stage.output as T;
     stage.state = "RUNNING";
     stage.startedAt = Date.now();
+    delete stage.endedAt;
     delete stage.error;
     stage.input = input;
     await persist();

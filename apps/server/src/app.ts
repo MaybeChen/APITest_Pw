@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Store } from "../../../packages/storage/src/index.js";
 import {
+  datasetSchema,
+  type Dataset,
   caseSchema,
   planSchema,
   recordingSchema,
@@ -19,7 +21,7 @@ import {
   type Environment,
   type AuthProfile,
 } from "../../../packages/contracts/src/index.js";
-import { validate } from "../../../packages/core/src/index.js";
+import { validate, validateDataset } from "../../../packages/core/src/index.js";
 import { Recorder, analyze } from "../../../packages/recorder/src/index.js";
 import { type AIProvider } from "../../../packages/planner/src/index.js";
 import {
@@ -29,7 +31,7 @@ import {
   type Generation,
 } from "../../../packages/planner/src/workflow.js";
 import { createConfiguredAIProvider } from "./ai-config.js";
-import { run } from "../../../packages/runner/src/index.js";
+import { run, runDataset } from "../../../packages/runner/src/index.js";
 import { demoArtifacts, demoEnv, demoAuth } from "./demo.js";
 export async function createApp(store = new Store(), provider?: AIProvider) {
   const aiProvider = provider ?? createConfiguredAIProvider();
@@ -255,7 +257,10 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     return { id: job.id };
   });
   app.get("/api/generations", async () =>
-    store.latest<Generation>("generation"),
+    (await store.latest<Generation>("generation")).map((job) => ({
+      ...job,
+      active: activeGenerations.has(job.id),
+    })),
   );
   app.get<{ Params: { id: string } }>("/api/generations/:id", async (req) => {
     const job = await store.get<Generation>("generation", req.params.id);
@@ -366,20 +371,64 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     await store.putBatch(entries);
     return { testCase, plan, assets: b.assets };
   });
+  app.get("/api/datasets", async () => store.list<Dataset>("dataset"));
+  app.post("/api/datasets", async (req) => {
+    const dataset = datasetSchema.parse(req.body);
+    const plan = await store.get<Plan>(
+      "plan",
+      dataset.planId,
+      dataset.planVersion,
+    );
+    if (!plan)
+      throw new Error("Plan not found: approve and save the plan first");
+    validateDataset(plan, dataset);
+    if (await store.get("dataset", dataset.id, dataset.version))
+      throw new Error("Dataset version already exists: increase version");
+    await store.put("dataset", dataset.id, dataset.version, dataset);
+    return dataset;
+  });
   app.post("/api/run", async (req) => {
     if (busy) throw new Error("A run is already active");
     const b = z
-      .object({ planId: z.string(), version: z.number().int().positive() })
+      .object({
+        planId: z.string(),
+        version: z.number().int().positive(),
+        dataset: z
+          .object({ id: z.string(), version: z.number().int().positive() })
+          .optional(),
+      })
       .parse(req.body);
     const p = await store.get<Plan>("plan", b.planId, b.version);
     if (!p) throw new Error("Plan not found");
     const c = await store.get<TestCase>("case", p.caseId, p.caseVersion);
     if (!c) throw new Error("Case not found");
     const assets = await store.list<Asset>("asset");
+    if (busy) throw new Error("A run is already active");
     busy = true;
     try {
       const profile = await store.get<AuthProfile>("auth", p.authProfileRef);
       if (!profile) throw new Error("Auth profile not configured");
+      if (b.dataset) {
+        const dataset = await store.get<Dataset>(
+          "dataset",
+          b.dataset.id,
+          b.dataset.version,
+        );
+        if (!dataset) throw new Error("Dataset not found");
+        return {
+          reports: await runDataset(
+            c,
+            p,
+            assets,
+            await envFor(p.environmentRef),
+            profile,
+            dataset,
+            async (report) => {
+              await store.put("report", report.id, 1, report);
+            },
+          ),
+        };
+      }
       const report = await run(
         c,
         p,
