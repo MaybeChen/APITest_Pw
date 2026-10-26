@@ -1,3 +1,5 @@
+import { RecordingHistory } from "./components/RecordingHistory";
+import type { Generation } from "../../../packages/planner/src/workflow";
 import { Datasets } from "./components/Datasets";
 import { GenerationProgress } from "./components/GenerationProgress";
 import { Workflow } from "./components/Workflow";
@@ -18,6 +20,9 @@ import {
   requestCategoryLabel,
 } from "./components/RequestDetails";
 import { EnvironmentForm } from "./components/EnvironmentForm";
+type Analysis = { recording: Recording; assets: Asset[] };
+const flowSteps = ["浏览器录制", "分析与筛选", "生成草稿", "用例编辑"];
+const stepNames = ["录制操作", "分析筛选", "生成草稿", "审核与执行"];
 type Bundle = { testCase: TestCase; plan: Plan; assets: Asset[] };
 async function api<T>(
   path: string,
@@ -53,12 +58,18 @@ function remember(key: string, value: string) {
   }
 }
 function App() {
-  const [tab, setTab] = useState("工作区"),
+  const [tab, setActiveTab] = useState("历史记录"),
+    [flowTab, setFlowTab] = useState("浏览器录制"),
+    [generations, setGenerations] = useState<Generation[]>([]),
+    [analyses, setAnalyses] = useState<Analysis[]>([]),
+    [generationId, setGenerationId] = useState<string>(),
     [aiProvider, setAIProvider] = useState<{
       provider: string;
       model: string;
     }>(),
-    [workspaceId, setWorkspaceId] = useState(""),
+    [workspaceId, setWorkspaceId] = useState(() =>
+      preference("tracepilot.workspaceId", ""),
+    ),
     [drafts, setDrafts] = useState<Bundle[]>([]),
     [cases, setCases] = useState<TestCase[]>([]),
     [plans, setPlans] = useState<Plan[]>([]),
@@ -92,18 +103,126 @@ function App() {
       preference("tracepilot.environmentRef", "demo"),
     ),
     [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([]);
+  const inFlow = flowSteps.includes(tab);
+  const currentPage = inFlow ? "用例流程" : tab;
+  const setTab = (next: string) => {
+    setActiveTab(next);
+    if (flowSteps.includes(next)) setFlowTab(next);
+  };
+  const clearFlow = () => {
+    setRecording(undefined);
+    setAnalysis(undefined);
+    setBundle(undefined);
+    setRaw("");
+    setReport(undefined);
+    setSelection("");
+    setGenerationId(undefined);
+    setError("");
+    setNotice("");
+    setFlowTab("浏览器录制");
+  };
+  const newFlow = () => {
+    if (recording?.state === "RECORDING") {
+      setTab("浏览器录制");
+      setNotice("请先停止当前录制，再开始新的流程。");
+      return;
+    }
+    clearFlow();
+    setTab("浏览器录制");
+  };
+  const openRecording = (r: Recording) =>
+    void task(async () => {
+      clearFlow();
+      setRecording(r);
+      if (r.environmentRef) setEnvironmentRef(r.environmentRef);
+      const [jobs, savedAnalysis] = await Promise.all([
+        api<Generation[]>(
+          `/generations?recordingId=${encodeURIComponent(r.id)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+        ),
+        api<Analysis | null>(
+          `/recordings/${encodeURIComponent(r.id)}/analysis`,
+        ),
+      ]);
+      const job = jobs
+        .filter((j) => j.input.recording.id === r.id)
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      setAnalysis(savedAnalysis ?? undefined);
+      if (job) {
+        if (!r.environmentRef)
+          setEnvironmentRef(job.input.environment?.id ?? environmentRef);
+        setGenerationId(job.id);
+        if (job.testCase && job.plan && job.state === "NEEDS_REVIEW") {
+          const draft = drafts.find(
+            (d) => d.testCase.caseId === job.testCase!.caseId,
+          );
+          const approved = cases.find((c) => c.caseId === job.testCase!.caseId);
+          const plan =
+            approved &&
+            plans.find(
+              (p) =>
+                p.caseId === approved.caseId &&
+                p.caseVersion === approved.version,
+            );
+          edit(
+            approved && plan
+              ? {
+                  testCase: approved,
+                  plan,
+                  assets: await api<Asset[]>("/assets"),
+                }
+              : (draft ?? {
+                  testCase: job.testCase,
+                  plan: job.plan,
+                  assets: job.input.assets,
+                }),
+          );
+          setTab("用例编辑");
+        } else setTab("生成草稿");
+      } else setTab(savedAnalysis ? "分析与筛选" : "浏览器录制");
+    });
+  const changeStep = (index: number) => {
+    if (index === 1 && recording && !analysis) {
+      void task(async () => {
+        setAnalysis(
+          await api<Analysis>(`/recordings/${recording.id}/analyze`, {}),
+        );
+        setTab("分析与筛选");
+      });
+    } else setTab(flowSteps[index]);
+  };
+  const workspaceCases = cases.filter(
+    (c) => !workspaceId || c.workspaceId === workspaceId,
+  );
+  const workspaceRecordings = recordings.filter(
+    (r) => !workspaceId || r.workspaceId === workspaceId,
+  );
+  const workspaceReports = reports.filter(
+    (r) =>
+      !workspaceId ||
+      workspaceCases.some((c) => c.caseId === r.caseId) ||
+      generations.some(
+        (j) =>
+          j.input.recording.workspaceId === workspaceId &&
+          j.testCase?.caseId === r.caseId,
+      ),
+  );
   const refresh = async () => {
-    const [c, p, r, re, w, en, dr, profiles, ai] = await Promise.all([
-      api<TestCase[]>("/cases"),
-      api<Plan[]>("/plans"),
-      api<Recording[]>("/recordings"),
-      api<Report[]>("/reports"),
-      api<{ id: string; name: string }[]>("/workspaces"),
-      api<Environment[]>("/environments"),
-      api<Bundle[]>("/drafts"),
-      api<AuthProfile[]>("/auth-profiles"),
-      api<{ provider: string; model: string }>("/ai-provider"),
-    ]);
+    const [c, p, r, re, w, en, dr, profiles, ai, jobs, savedAnalyses] =
+      await Promise.all([
+        api<TestCase[]>("/cases"),
+        api<Plan[]>("/plans"),
+        api<Recording[]>("/recordings"),
+        api<Report[]>("/reports"),
+        api<{ id: string; name: string }[]>("/workspaces"),
+        api<Environment[]>("/environments"),
+        api<Bundle[]>("/drafts"),
+        api<AuthProfile[]>("/auth-profiles"),
+        api<{ provider: string; model: string }>("/ai-provider"),
+        api<Generation[]>("/generations"),
+        api<Analysis[]>("/analyses"),
+      ]);
+    setGenerations(jobs);
+    setAnalyses(savedAnalyses);
     setAIProvider(ai);
     setAuthProfiles(profiles);
     setDrafts(dr);
@@ -120,6 +239,9 @@ function App() {
       w.some((item) => item.id === current) ? current : "",
     );
   };
+  useEffect(() => {
+    remember("tracepilot.workspaceId", workspaceId);
+  }, [workspaceId]);
   useEffect(() => {
     remember("tracepilot.environmentRef", environmentRef);
   }, [environmentRef]);
@@ -166,6 +288,7 @@ function App() {
   };
   const loadDemo = () =>
     task(async () => {
+      clearFlow();
       const b = await api<Bundle>("/demo", {});
       b.testCase.workspaceId = workspaceId || undefined;
       edit(b);
@@ -189,21 +312,21 @@ function App() {
         </a>
         <p className="eyebrow">API AUTOMATION STUDIO</p>
         <nav>
-          {[
-            "工作区",
-            "浏览器录制",
-            "分析与筛选",
-            "用例编辑",
-            "运行报告",
-            "环境配置",
-          ].map((t, i) => (
+          {["用例流程", "历史记录", "运行报告", "配置"].map((page, i) => (
             <button
-              key={t}
-              className={t === tab ? "active" : ""}
-              onClick={() => setTab(t)}
+              key={page}
+              aria-label={page}
+              className={currentPage === page ? "active" : ""}
+              onClick={() => {
+                if (page === "用例流程") setTab(flowTab);
+                else {
+                  setTab(page);
+                  void refresh().catch((e) => setError(String(e)));
+                }
+              }}
             >
               <span>0{i + 1}</span>
-              {t}
+              {page}
             </button>
           ))}
         </nav>
@@ -216,8 +339,8 @@ function App() {
       <main>
         <header>
           <div>
-            <p className="eyebrow">WORKSPACE / {tab}</p>
-            <h1>{tab}</h1>
+            <p className="eyebrow">TRACEPILOT / {currentPage}</p>
+            <h1>{currentPage}</h1>
           </div>
           <span className="badge">
             {aiProvider
@@ -228,6 +351,83 @@ function App() {
         <p className="subtitle">
           从浏览器中的业务流程，到可追溯的 API 回归测试。
         </p>
+        <div className="context-bar">
+          <label>
+            当前工作区{" "}
+            <select
+              aria-label="当前工作区"
+              value={workspaceId}
+              disabled={busy || recording?.state === "RECORDING"}
+              onChange={(e) => {
+                clearFlow();
+                setWorkspaceId(e.target.value);
+                if (inFlow) setTab("浏览器录制");
+              }}
+            >
+              <option value="">全部工作区</option>
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span>
+            {inFlow
+              ? recording
+                ? `当前记录：${recording.caseName}`
+                : bundle
+                  ? `当前草稿：${bundle.testCase.name}`
+                  : "新建录制流程"
+              : "按工作区查看记录与产物"}
+          </span>
+        </div>
+        {inFlow && (
+          <section className="flow-panel">
+            <div className="row">
+              <div>
+                <strong className="flow-title">
+                  {recording?.caseName ??
+                    bundle?.testCase.name ??
+                    "新建录制流程"}
+                </strong>
+                <p>
+                  {recording
+                    ? `录制 ID：${recording.id} · ${recording.target}`
+                    : "录制、分析、生成和审核在同一条流程中完成。"}
+                </p>
+              </div>
+              <button
+                className="secondary"
+                disabled={busy || recording?.state === "RECORDING"}
+                onClick={newFlow}
+              >
+                新建录制流程
+              </button>
+            </div>
+            <ol className="flow-steps" aria-label="用例流程进度">
+              {flowSteps.map((step, i) => (
+                <li key={step}>
+                  <button
+                    aria-current={tab === step ? "step" : undefined}
+                    className={tab === step ? "active" : "secondary"}
+                    disabled={
+                      busy ||
+                      (i > 0 && recording?.state === "RECORDING") ||
+                      (i === 1 && recording?.state !== "STOPPED") ||
+                      (i === 2 && !generationId) ||
+                      (i === 3 && !bundle)
+                    }
+                    onClick={() => changeStep(i)}
+                  >
+                    <span>{i + 1}</span>
+                    {stepNames[i]}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         {busy && (
           <div role="status" className="message">
             正在处理，请稍候…
@@ -239,13 +439,13 @@ function App() {
           </div>
         )}
         {notice && <div className="message">{notice}</div>}
-        {tab === "工作区" && (
+        {tab === "历史记录" && (
           <>
             <div className="stats">
               {[
-                ["已批准版本", cases.length],
-                ["录制记录", recordings.length],
-                ["历史运行", reports.length],
+                ["已批准版本", workspaceCases.length],
+                ["录制记录", workspaceRecordings.length],
+                ["历史运行", workspaceReports.length],
               ].map(([k, v]) => (
                 <article key={k}>
                   <small>{k}</small>
@@ -259,234 +459,200 @@ function App() {
                 <h2>让真实操作成为测试证据</h2>
                 <p>录制业务流程，审查语义与执行计划，再进行隔离回放。</p>
               </div>
-              <button disabled={busy} onClick={() => setTab("浏览器录制")}>
-                ＋ 创建录制
+              <button disabled={busy} onClick={newFlow}>
+                新建录制流程
               </button>
-              <button className="secondary" disabled={busy} onClick={loadDemo}>
+              <button
+                className="secondary"
+                disabled={busy || recording?.state === "RECORDING"}
+                onClick={loadDemo}
+              >
                 载入订单演示模板
               </button>
             </section>
-            <section>
-              <h2>工作区</h2>
-              <select
-                aria-label="当前工作区"
-                value={workspaceId}
-                onChange={(e) => setWorkspaceId(e.target.value)}
-              >
-                <option value="">全部工作区</option>
-                {workspaces.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const d = new FormData(e.currentTarget);
-                  void task(async () => {
-                    await api("/workspaces", { name: d.get("name") });
-                  });
-                }}
-              >
-                <input required name="name" placeholder="工作区名称" />
-                <button disabled={busy}>创建工作区</button>
-              </form>
-              {workspaces.map((w) => (
-                <div className="row" key={w.id}>
-                  <span>{w.name}</span>
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    aria-label={`删除工作区 ${w.name}`}
-                    onClick={() => {
-                      if (
-                        !window.confirm(
-                          `删除工作区“${w.name}”？用例、录制和报告将保留，可从“全部工作区”查看。`,
-                        )
-                      )
-                        return;
-                      void task(async () => {
-                        await api(
-                          `/workspaces/${encodeURIComponent(w.id)}`,
-                          undefined,
-                          "DELETE",
-                        );
-                        setNotice("工作区已删除，用例、录制和报告已保留。");
-                      });
-                    }}
-                  >
-                    删除
-                  </button>
-                </div>
-              ))}
-            </section>
-            <section>
-              <h2>草稿历史</h2>
-              {drafts
-                .filter(
-                  (b, i, a) =>
-                    a.findIndex(
-                      (x) => x.testCase.caseId === b.testCase.caseId,
-                    ) === i,
-                )
-                .filter(
-                  (b) => !workspaceId || b.testCase.workspaceId === workspaceId,
-                )
-                .map((b) => (
-                  <button
-                    className="secondary"
-                    key={b.testCase.caseId}
-                    onClick={() => {
-                      edit(b);
-                      setTab("用例编辑");
-                    }}
-                  >
-                    {b.testCase.name} · 草稿
-                  </button>
-                ))}
-            </section>
-            <section>
-              <h2>测试用例</h2>
-              {!cases.length ? (
-                <p className="empty">
-                  尚无已批准用例。录制业务流程，或载入演示模板开始。
-                </p>
-              ) : (
-                cases
-                  .filter((c) => !workspaceId || c.workspaceId === workspaceId)
-                  .map((c) => (
-                    <div className="row" key={`${c.caseId}:${c.version}`}>
-                      <div>
-                        <b>{c.name}</b>
-                        <p>
-                          Case v{c.version} · {c.status} · 最近结果：
-                          {reports.find((r) => r.caseId === c.caseId)?.status ??
-                            "未运行"}
-                        </p>
+            <RecordingHistory
+              recordings={workspaceRecordings}
+              generations={generations}
+              analyzedIds={new Set(analyses.map((a) => a.recording.id))}
+              approvedCaseIds={new Set(cases.map((c) => c.caseId))}
+              busy={busy || recording?.state === "RECORDING"}
+              onOpen={openRecording}
+            />
+            <details>
+              <summary>未关联录制的模板与旧用例</summary>{" "}
+              <section>
+                <h2>草稿历史</h2>
+                {drafts
+                  .filter(
+                    (b, i, a) =>
+                      a.findIndex(
+                        (x) => x.testCase.caseId === b.testCase.caseId,
+                      ) === i,
+                  )
+                  .filter(
+                    (b) =>
+                      !workspaceId || b.testCase.workspaceId === workspaceId,
+                  )
+                  .filter(
+                    (b) =>
+                      !generations.some(
+                        (j) => j.testCase?.caseId === b.testCase.caseId,
+                      ),
+                  )
+                  .map((b) => (
+                    <button
+                      className="secondary"
+                      key={b.testCase.caseId}
+                      onClick={() => {
+                        clearFlow();
+                        edit(b);
+                        setTab("用例编辑");
+                      }}
+                    >
+                      {b.testCase.name} · 草稿
+                    </button>
+                  ))}
+              </section>
+              <section>
+                <h2>测试用例</h2>
+                {!cases.length ? (
+                  <p className="empty">
+                    尚无已批准用例。录制业务流程，或载入演示模板开始。
+                  </p>
+                ) : (
+                  cases
+                    .filter(
+                      (c) => !workspaceId || c.workspaceId === workspaceId,
+                    )
+                    .filter(
+                      (c) =>
+                        !generations.some(
+                          (j) => j.testCase?.caseId === c.caseId,
+                        ),
+                    )
+                    .map((c) => (
+                      <div className="row" key={`${c.caseId}:${c.version}`}>
+                        <div>
+                          <b>{c.name}</b>
+                          <p>
+                            Case v{c.version} · {c.status} · 最近结果：
+                            {reports.find((r) => r.caseId === c.caseId)
+                              ?.status ?? "未运行"}
+                          </p>
+                        </div>
+                        <div>
+                          {plans
+                            .filter(
+                              (p) =>
+                                p.caseId === c.caseId &&
+                                p.caseVersion === c.version,
+                            )
+                            .map((p) => (
+                              <React.Fragment key={`${p.planId}:${p.version}`}>
+                                <button
+                                  className="secondary"
+                                  onClick={() =>
+                                    void task(async () => {
+                                      clearFlow();
+                                      edit({
+                                        testCase: c,
+                                        plan: p,
+                                        assets: await api<Asset[]>("/assets"),
+                                      });
+                                      setTab("用例编辑");
+                                    })
+                                  }
+                                >
+                                  查看 Plan v{p.version}
+                                </button>
+                                <button
+                                  disabled={
+                                    busy ||
+                                    Object.keys(p.parameters ?? {}).length > 0
+                                  }
+                                  onClick={() => runPlan(p)}
+                                >
+                                  回放 v{p.version}
+                                </button>
+                              </React.Fragment>
+                            ))}
+                        </div>
                       </div>
-                      <div>
-                        {plans
-                          .filter(
-                            (p) =>
-                              p.caseId === c.caseId &&
-                              p.caseVersion === c.version,
-                          )
-                          .map((p) => (
-                            <React.Fragment key={`${p.planId}:${p.version}`}>
-                              <button
-                                className="secondary"
-                                onClick={() =>
-                                  void task(async () => {
-                                    edit({
-                                      testCase: c,
-                                      plan: p,
-                                      assets: await api<Asset[]>("/assets"),
-                                    });
-                                    setTab("用例编辑");
-                                  })
-                                }
-                              >
-                                查看 Plan v{p.version}
-                              </button>
-                              <button
-                                disabled={
-                                  busy ||
-                                  Object.keys(p.parameters ?? {}).length > 0
-                                }
-                                onClick={() => runPlan(p)}
-                              >
-                                回放 v{p.version}
-                              </button>
-                            </React.Fragment>
-                          ))}
-                      </div>
-                    </div>
-                  ))
-              )}
-            </section>
-            <section>
-              <h2>录制会话</h2>
-              {recordings.map((r) => (
-                <button
-                  className="secondary"
-                  key={r.id}
-                  onClick={() => {
-                    setRecording(r);
-                    setTab("浏览器录制");
-                  }}
-                >
-                  {r.caseName} · {r.state}
-                </button>
-              ))}
-            </section>
+                    ))
+                )}
+              </section>
+            </details>
           </>
         )}
         {tab === "浏览器录制" && (
           <>
-            <section>
-              <h2>新建录制会话</h2>
-              <p>
-                默认连接本地订单演示站点。可见浏览器需要桌面显示环境；云端测试使用
-                headless 模式。
-              </p>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const d = new FormData(e.currentTarget);
-                  void task(async () => {
-                    setRecording(
-                      await api<Recording>("/recordings", {
-                        ...Object.fromEntries(d),
-                        environmentRef,
-                        workspaceId: workspaceId || undefined,
-                      }),
-                    );
-                  });
-                }}
-              >
-                <label>
-                  用例名称
-                  <input required name="caseName" placeholder="删除订单成功" />
-                </label>
-                <label>
-                  测试场景
-                  <textarea
-                    required
-                    name="scenario"
-                    placeholder="描述操作目标与预期业务结果"
-                  />
-                </label>
-                <label>
-                  执行环境
-                  <select
-                    value={environmentRef}
-                    onChange={(e) => setEnvironmentRef(e.target.value)}
-                  >
-                    {environments.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.id} · {e.baseURL}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  目标站点
-                  <input
-                    required
-                    name="target"
-                    defaultValue="http://127.0.0.1:3100"
-                  />
-                </label>
-                <label>
-                  录制说明
-                  <input name="notes" />
-                </label>
-                <button disabled={busy || recording?.state === "RECORDING"}>
-                  开始录制
-                </button>
-              </form>
-            </section>
+            {!recording && (
+              <section>
+                <h2>新建录制会话</h2>
+                <p>
+                  默认连接本地订单演示站点。可见浏览器需要桌面显示环境；云端测试使用
+                  headless 模式。
+                </p>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const d = new FormData(e.currentTarget);
+                    void task(async () => {
+                      setRecording(
+                        await api<Recording>("/recordings", {
+                          ...Object.fromEntries(d),
+                          environmentRef,
+                          workspaceId: workspaceId || undefined,
+                        }),
+                      );
+                    });
+                  }}
+                >
+                  <label>
+                    用例名称
+                    <input
+                      required
+                      name="caseName"
+                      placeholder="删除订单成功"
+                    />
+                  </label>
+                  <label>
+                    测试场景
+                    <textarea
+                      required
+                      name="scenario"
+                      placeholder="描述操作目标与预期业务结果"
+                    />
+                  </label>
+                  <label>
+                    执行环境
+                    <select
+                      value={environmentRef}
+                      onChange={(e) => setEnvironmentRef(e.target.value)}
+                    >
+                      {environments.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.id} · {e.baseURL}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    目标站点
+                    <input
+                      required
+                      name="target"
+                      defaultValue="http://127.0.0.1:3100"
+                    />
+                  </label>
+                  <label>
+                    录制说明
+                    <input name="notes" />
+                  </label>
+                  <button disabled={busy}>开始录制</button>
+                </form>
+              </section>
+            )}
             {recording && (
               <section>
                 <div className="row">
@@ -510,14 +676,20 @@ function App() {
                     {recording.state === "RECORDING" ? (
                       <button
                         onClick={() =>
-                          void task(async () =>
-                            setRecording(
-                              await api<Recording>(
-                                "/recordings/" + recording.id + "/stop",
+                          void task(async () => {
+                            const stopped = await api<Recording>(
+                              `/recordings/${recording.id}/stop`,
+                              {},
+                            );
+                            setRecording(stopped);
+                            setAnalysis(
+                              await api<Analysis>(
+                                `/recordings/${stopped.id}/analyze`,
                                 {},
                               ),
-                            ),
-                          )
+                            );
+                            setTab("分析与筛选");
+                          })
                         }
                       >
                         停止并保存
@@ -588,18 +760,6 @@ function App() {
         {tab === "分析与筛选" && (
           <section>
             <h2>候选请求与证据</h2>
-            <GenerationProgress
-              onOpen={(job) => {
-                if (job.testCase && job.plan) {
-                  edit({
-                    testCase: job.testCase,
-                    plan: job.plan,
-                    assets: job.input.assets,
-                  });
-                  setTab("用例编辑");
-                }
-              }}
-            />
 
             {!analysis ? (
               <p className="empty">先停止录制并执行分析。</p>
@@ -723,11 +883,28 @@ function App() {
                   }
                   onClick={() =>
                     void task(async () => {
-                      await api("/generations", {
-                        ...analysis,
-                        environmentRef,
+                      const selected = await api<Analysis>(
+                        `/recordings/${analysis.recording.id}/analyze`,
+                        {
+                          overrides: Object.fromEntries(
+                            analysis.recording.requests.map((r) => [
+                              r.id,
+                              !!r.keep,
+                            ]),
+                          ),
+                        },
+                      );
+                      setAnalysis(selected);
+                      const job = await api<{ id: string }>("/generations", {
+                        ...selected,
+                        environmentRef:
+                          recording?.environmentRef ?? environmentRef,
                       });
-                      setNotice("生成工作流已启动，请在下方查看阶段进度。");
+                      setGenerationId(job.id);
+                      setTab("生成草稿");
+                      setNotice(
+                        "生成已启动，阶段结果自动保存在当前录制记录下。",
+                      );
                     })
                   }
                 >
@@ -736,6 +913,26 @@ function App() {
               </>
             )}
           </section>
+        )}
+        {tab === "生成草稿" && recording && (
+          <>
+            <GenerationProgress
+              key={`${workspaceId}:${recording?.id}:${generationId}`}
+              recordingId={recording?.id}
+              generationId={generationId}
+              workspaceId={workspaceId}
+              onOpen={(job) => {
+                if (job.testCase && job.plan) {
+                  edit({
+                    testCase: job.testCase,
+                    plan: job.plan,
+                    assets: job.input.assets,
+                  });
+                  setTab("用例编辑");
+                }
+              }}
+            />
+          </>
         )}
         {tab === "用例编辑" &&
           (!bundle ? (
@@ -936,7 +1133,7 @@ function App() {
                     onClick={() =>
                       void task(async () => {
                         edit(await api<Bundle>("/drafts", bundle));
-                        setNotice("草稿已保存，可从工作区重新打开。");
+                        setNotice("草稿已保存，可从历史记录重新打开。");
                       })
                     }
                   >
@@ -1038,30 +1235,14 @@ function App() {
           <>
             <section>
               <h2>历史运行</h2>
-              {!reports.length && <p className="empty">尚无运行报告。</p>}
-              {reports.map((r) => (
+              {!workspaceReports.length && (
+                <p className="empty">尚无运行报告。</p>
+              )}
+              {workspaceReports.map((r) => (
                 <button
                   className="secondary"
                   key={r.id}
-                  onClick={() => {
-                    setReport(r);
-                    void task(async () => {
-                      const c = cases.find(
-                        (c) =>
-                          c.caseId === r.caseId && c.version === r.caseVersion,
-                      );
-                      const p = plans.find(
-                        (p) =>
-                          p.planId === r.planId && p.version === r.planVersion,
-                      );
-                      if (c && p)
-                        edit({
-                          testCase: c,
-                          plan: p,
-                          assets: await api("/assets"),
-                        });
-                    });
-                  }}
+                  onClick={() => setReport(r)}
                 >
                   {r.dataset && `${r.dataset.rowName} · `}
                   {r.status} · {new Date(r.startedAt).toLocaleString()}
@@ -1089,25 +1270,31 @@ function App() {
                   UI 登录：{report.auth.status} {report.auth.error} · 清理：
                   {report.cleanupStatus}
                 </p>
-                {(report.semanticSteps ?? bundle?.testCase.steps ?? []).map(
-                  (s) => (
-                    <article key={s.id}>
-                      <h3>{s.title}</h3>
-                      <p>预期：{s.expected}</p>
-                      {report.steps
-                        .filter((r) => r.semanticStepRef === s.id)
-                        .map((r) => (
-                          <details key={r.stepId}>
-                            <summary>
-                              {r.status} · {r.stepId} ·{" "}
-                              {r.endedAt - r.startedAt} ms
-                            </summary>
-                            <pre>{JSON.stringify(r, null, 2)}</pre>
-                          </details>
-                        ))}
-                    </article>
-                  ),
-                )}
+                {(
+                  report.semanticSteps ??
+                  cases.find(
+                    (c) =>
+                      c.caseId === report.caseId &&
+                      c.version === report.caseVersion,
+                  )?.steps ??
+                  []
+                ).map((s) => (
+                  <article key={s.id}>
+                    <h3>{s.title}</h3>
+                    <p>预期：{s.expected}</p>
+                    {report.steps
+                      .filter((r) => r.semanticStepRef === s.id)
+                      .map((r) => (
+                        <details key={r.stepId}>
+                          <summary>
+                            {r.status} · {r.stepId} · {r.endedAt - r.startedAt}{" "}
+                            ms
+                          </summary>
+                          <pre>{JSON.stringify(r, null, 2)}</pre>
+                        </details>
+                      ))}
+                  </article>
+                ))}
                 <details>
                   <summary>
                     运行级资源台账 · 残留 {report.residualResources.length}
@@ -1122,125 +1309,172 @@ function App() {
             )}
           </>
         )}
-        {tab === "环境配置" && (
-          <section>
-            <h2>环境与 UI 认证协议</h2>
-            <p>
-              显式配置允许访问的站点、写操作权限与声明式登录动作。密码使用
-              secretRef 引用服务端环境变量；不要在此输入密钥值。
-            </p>
-            <p>
-              内部测试站点使用自签名证书时，可在该环境 JSON 中设置
-              ignoreHTTPSErrors 为 true，仅跳过这个环境的录制与回放证书校验。
-              默认 false；请只对你信任的测试环境开启。
-            </p>
-            <div className="toolbar">
-              <button
-                disabled={busy}
-                onClick={() => {
-                  setError("");
-                  setNotice("");
-                  setCreatingEnvironment(true);
+        {tab === "配置" && (
+          <>
+            <section>
+              <h2>工作区</h2>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const d = new FormData(e.currentTarget);
+                  void task(async () => {
+                    await api("/workspaces", { name: d.get("name") });
+                  });
                 }}
               >
-                新增环境
-              </button>
-              <button
-                className="secondary"
-                onClick={() =>
-                  void task(async () => {
-                    setConfigDirty(false);
+                <input required name="name" placeholder="工作区名称" />
+                <button disabled={busy}>创建工作区</button>
+              </form>
+              {workspaces.map((w) => (
+                <div className="row" key={w.id}>
+                  <span>{w.name}</span>
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    aria-label={`删除工作区 ${w.name}`}
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          `删除工作区“${w.name}”？用例、录制和报告将保留，可从“全部工作区”查看。`,
+                        )
+                      )
+                        return;
+                      void task(async () => {
+                        await api(
+                          `/workspaces/${encodeURIComponent(w.id)}`,
+                          undefined,
+                          "DELETE",
+                        );
+                        setNotice("工作区已删除，用例、录制和报告已保留。");
+                      });
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+            </section>
+            <section>
+              <h2>环境与 UI 认证协议</h2>
+              <p>
+                显式配置允许访问的站点、写操作权限与声明式登录动作。密码使用
+                secretRef 引用服务端环境变量；不要在此输入密钥值。
+              </p>
+              <p>
+                内部测试站点使用自签名证书时，可在该环境 JSON 中设置
+                ignoreHTTPSErrors 为 true，仅跳过这个环境的录制与回放证书校验。
+                默认 false；请只对你信任的测试环境开启。
+              </p>
+              <div className="toolbar">
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    setError("");
+                    setNotice("");
+                    setCreatingEnvironment(true);
+                  }}
+                >
+                  新增环境
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void task(async () => {
+                      setConfigDirty(false);
+                      setConfigKind("environments");
+                      setConfigId(environmentRef);
+                    })
+                  }
+                >
+                  编辑环境
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void task(async () => {
+                      setConfigDirty(false);
+                      setConfigKind("auth-profiles");
+                      setConfigId(authProfiles[0]?.id ?? "");
+                    })
+                  }
+                >
+                  编辑 UI AuthProfile
+                </button>
+              </div>
+              {creatingEnvironment && (
+                <EnvironmentForm
+                  onCancel={() => setCreatingEnvironment(false)}
+                  onCreate={async (environment) => {
+                    const saved = await api<Environment>("/environments", {
+                      ...environment,
+                      createOnly: true,
+                    });
+                    await refresh();
                     setConfigKind("environments");
-                    setConfigId(environmentRef);
-                  })
-                }
-              >
-                编辑环境
-              </button>
-              <button
-                className="secondary"
-                onClick={() =>
-                  void task(async () => {
                     setConfigDirty(false);
-                    setConfigKind("auth-profiles");
-                    setConfigId(authProfiles[0]?.id ?? "");
-                  })
-                }
-              >
-                编辑 UI AuthProfile
-              </button>
-            </div>
-            {creatingEnvironment && (
-              <EnvironmentForm
-                onCancel={() => setCreatingEnvironment(false)}
-                onCreate={async (environment) => {
-                  const saved = await api<Environment>("/environments", {
-                    ...environment,
-                    createOnly: true,
-                  });
-                  await refresh();
-                  setConfigKind("environments");
-                  setConfigDirty(false);
-                  setConfigId(saved.id);
-                  setEnvironmentRef(saved.id);
-                  setCreatingEnvironment(false);
-                  setNotice(`环境“${saved.id}”已创建并保存，可在录制页选择。`);
+                    setConfigId(saved.id);
+                    setEnvironmentRef(saved.id);
+                    setCreatingEnvironment(false);
+                    setNotice(
+                      `环境“${saved.id}”已创建并保存，可在录制页选择。`,
+                    );
+                  }}
+                />
+              )}
+              <label>
+                已保存配置
+                <select
+                  aria-label="已保存配置"
+                  value={configId}
+                  onChange={(e) => {
+                    setConfigDirty(false);
+                    setConfigId(e.target.value);
+                  }}
+                >
+                  {(configKind === "environments"
+                    ? environments
+                    : authProfiles
+                  ).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p>
+                当前配置类型：{configKind}。修改 id
+                可新建配置。保存后写入本地数据库，刷新或重启后仍可选择。
+              </p>
+              <textarea
+                className="json"
+                aria-label="环境配置 JSON"
+                value={configText}
+                onChange={(e) => {
+                  setConfigText(e.target.value);
+                  setConfigDirty(true);
                 }}
               />
-            )}
-            <label>
-              已保存配置
-              <select
-                aria-label="已保存配置"
-                value={configId}
-                onChange={(e) => {
-                  setConfigDirty(false);
-                  setConfigId(e.target.value);
-                }}
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void task(async () => {
+                    const saved = await api<{ id: string }>(
+                      "/" + configKind,
+                      JSON.parse(configText),
+                    );
+                    await refresh();
+                    setConfigDirty(false);
+                    setConfigId(saved.id);
+                    if (configKind === "environments")
+                      setEnvironmentRef(saved.id);
+                    setNotice("配置已保存；后续验证和回放使用最新配置。");
+                  })
+                }
               >
-                {(configKind === "environments"
-                  ? environments
-                  : authProfiles
-                ).map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p>
-              当前配置类型：{configKind}。修改 id
-              可新建配置。保存后写入本地数据库，刷新或重启后仍可选择。
-            </p>
-            <textarea
-              className="json"
-              aria-label="环境配置 JSON"
-              value={configText}
-              onChange={(e) => {
-                setConfigText(e.target.value);
-                setConfigDirty(true);
-              }}
-            />
-            <button
-              disabled={busy}
-              onClick={() =>
-                void task(async () => {
-                  const saved = await api<{ id: string }>(
-                    "/" + configKind,
-                    JSON.parse(configText),
-                  );
-                  await refresh();
-                  setConfigDirty(false);
-                  setConfigId(saved.id);
-                  if (configKind === "environments")
-                    setEnvironmentRef(saved.id);
-                  setNotice("配置已保存；后续验证和回放使用最新配置。");
-                })
-              }
-            >
-              保存配置
-            </button>
-          </section>
+                保存配置
+              </button>
+            </section>
+          </>
         )}
         <footer>TracePilot · 录制是证据，审核后的计划才是执行契约。</footer>
       </main>

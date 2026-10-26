@@ -115,6 +115,7 @@ export const contextSnapshotSchema = z.object({
 });
 export const recordingSchema = z.object({
   id,
+  environmentRef: id.optional(),
   workspaceId: z.string().optional(),
   caseName: id,
   scenario: id,

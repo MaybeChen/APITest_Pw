@@ -228,6 +228,7 @@ export async function executeGeneration(
     job.testCase = await model("SEMANTIC_CASE", caseSchema, {
       businessFlow: job.businessFlow,
     });
+    job.testCase.workspaceId = job.input.recording.workspaceId;
     job.testCase.status = "DRAFT";
     job.testCase.steps.forEach((s) => (s.review = "NEEDS_REVIEW"));
     job.plan = await model("EXECUTION_PLAN", planSchema, {
@@ -281,6 +282,7 @@ export async function executeGeneration(
       });
       job.testCase = fixed.testCase;
       job.plan = fixed.plan;
+      job.testCase.workspaceId = job.input.recording.workspaceId;
       job.testCase.status = "DRAFT";
       job.testCase.steps.forEach((s) => (s.review = "NEEDS_REVIEW"));
       job.plan.status = "DRAFT";

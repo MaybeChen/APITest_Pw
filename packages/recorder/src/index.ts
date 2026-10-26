@@ -36,6 +36,7 @@ export class Recorder {
       target: string;
       notes?: string;
       workspaceId?: string;
+      environmentRef?: string;
     },
     private env: Environment,
   ) {

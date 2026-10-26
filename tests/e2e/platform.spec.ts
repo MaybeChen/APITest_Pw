@@ -4,7 +4,7 @@ test("review, approve and replay a semantic case from the UI", async ({
 }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "工作区", exact: true }).first(),
+    page.getByRole("heading", { name: "历史记录", exact: true }).first(),
   ).toBeVisible();
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await expect(
@@ -34,9 +34,10 @@ test("persists a draft and restores it after a page reload", async ({
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await page.getByRole("button", { name: "保存草稿", exact: true }).click();
   await expect(
-    page.getByText("草稿已保存，可从工作区重新打开。"),
+    page.getByText("草稿已保存，可从历史记录重新打开。"),
   ).toBeVisible();
   await page.reload();
+  await page.getByText("未关联录制的模板与旧用例", { exact: true }).click();
   await page
     .getByRole("button", { name: "删除本次运行创建的订单 · 草稿" })
     .first()
@@ -55,7 +56,7 @@ test("restores saved environment configuration and recording selection after rel
 }) => {
   const id = "saved-env-" + Date.now();
   await page.goto("/");
-  await page.getByRole("button", { name: /环境配置/ }).click();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   const editor = page.getByRole("textbox", { name: "环境配置 JSON" });
   await expect(editor).toHaveValue(/"baseURL"/);
   await editor.fill(
@@ -76,12 +77,12 @@ test("restores saved environment configuration and recording selection after rel
     id,
   );
   await page.reload();
-  await page.getByRole("button", { name: /环境配置/ }).click();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
     id,
   );
   await expect(editor).toHaveValue(/"ignoreHTTPSErrors": true/);
-  await page.getByRole("button", { name: /浏览器录制/ }).click();
+  await page.getByRole("button", { name: "用例流程", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "执行环境" })).toHaveValue(
     id,
   );
@@ -92,6 +93,7 @@ test("deletes a workspace after confirmation and keeps it deleted after reload",
 }) => {
   const name = "删除验证-" + Date.now();
   await page.goto("/");
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   await page.getByPlaceholder("工作区名称").fill(name);
   await page.getByRole("button", { name: "创建工作区", exact: true }).click();
   const remove = page.getByRole("button", {
@@ -106,6 +108,7 @@ test("deletes a workspace after confirmation and keeps it deleted after reload",
   await remove.click();
   await expect(remove).toHaveCount(0);
   await page.reload();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   await expect(remove).toHaveCount(0);
 });
 
@@ -115,7 +118,7 @@ test("creates a custom environment using the form without overwriting an existin
 }) => {
   const id = "manual-env-" + Date.now();
   await page.goto("/");
-  await page.getByRole("button", { name: /环境配置/ }).click();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   await page.getByRole("button", { name: "新增环境", exact: true }).click();
   const form = page.getByRole("form", { name: "新增环境表单" });
   await form.getByLabel("环境名称 / 标识").fill(id);
@@ -153,7 +156,7 @@ test("creates a custom environment using the form without overwriting an existin
     id,
   );
   await page.reload();
-  await page.getByRole("button", { name: /环境配置/ }).click();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "已保存配置" })).toHaveValue(
     id,
   );
@@ -189,7 +192,7 @@ test("creates a custom environment using the form without overwriting an existin
   ).toEqual(saved);
   await form.getByRole("button", { name: "取消新增" }).click();
   await expect(form).toHaveCount(0);
-  await page.getByRole("button", { name: /浏览器录制/ }).click();
+  await page.getByRole("button", { name: "用例流程", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "执行环境" })).toHaveValue(
     id,
   );
@@ -275,7 +278,7 @@ test("shows pending classification and saved request and response evidence in an
     route.fulfill({ json: { recording, assets: [] } }),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "接口证据展示 · STOPPED" }).click();
+  await page.getByRole("button", { name: "打开流程 接口证据展示" }).click();
   await page.getByRole("button", { name: "分析录制", exact: true }).click();
   await expect(
     page.getByText("当前展示的是规则分析，不是大模型分析。", { exact: false }),
@@ -323,7 +326,20 @@ test("restores staged generation progress and opens its workflow draft", async (
   const bundle = await (
     await request.post("http://127.0.0.1:3000/api/demo")
   ).json();
-  await page.route("**/api/generations", (route) =>
+  const recording = {
+    id: "saved-record",
+    caseName: bundle.testCase.name,
+    scenario: "历史生成",
+    target: "http://127.0.0.1:3100",
+    startedAt: 1000,
+    state: "STOPPED",
+    requests: [],
+    operations: [],
+  };
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recording] }),
+  );
+  await page.route("**/api/generations*", (route) =>
     route.fulfill({
       json: [
         {
@@ -345,14 +361,17 @@ test("restores staged generation progress and opens its workflow draft", async (
           plan: bundle.plan,
           input: {
             assets: bundle.assets,
-            recording: { caseName: bundle.testCase.name },
+            recording,
           },
         },
       ],
     }),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: /分析与筛选/ }).click();
+  await page
+    .getByRole("button", { name: `打开流程 ${bundle.testCase.name}` })
+    .click();
+  await page.getByRole("button", { name: /生成草稿/ }).click();
   await expect(
     page.getByRole("heading", { name: "生成工作流", exact: true }),
   ).toBeVisible();
@@ -399,7 +418,20 @@ test("extracts test data and replays one approved workflow with two datasets row
 test("shows generation stage, elapsed time, artifacts and recoverable errors", async ({
   page,
 }) => {
-  await page.route("**/api/generations", (route) =>
+  const recording = {
+    id: "failed-record",
+    caseName: "生成界面测试",
+    scenario: "失败恢复",
+    target: "http://127.0.0.1:3100",
+    startedAt: 1000,
+    state: "STOPPED",
+    requests: [],
+    operations: [],
+  };
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recording] }),
+  );
+  await page.route("**/api/generations*", (route) =>
     route.fulfill({
       json: [
         {
@@ -409,7 +441,7 @@ test("shows generation stage, elapsed time, artifacts and recoverable errors", a
           createdAt: Date.now() - 5000,
           updatedAt: Date.now(),
           provider: { name: "TestProvider", version: "1" },
-          input: { recording: { caseName: "生成界面测试" } },
+          input: { recording },
           error: "模型连接失败，请重试",
           stages: [
             {
@@ -435,7 +467,7 @@ test("shows generation stage, elapsed time, artifacts and recoverable errors", a
     }),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "分析与筛选" }).click();
+  await page.getByRole("button", { name: "打开流程 生成界面测试" }).click();
   await expect(page.getByText("当前阶段：识别业务流程")).toBeVisible();
   await expect(page.getByText("总耗时：5.0 秒")).toBeVisible();
   await expect(page.getByText("进度：1 / 3")).toBeVisible();
@@ -445,4 +477,220 @@ test("shows generation stage, elapsed time, artifacts and recoverable errors", a
   await expect(
     page.getByRole("button", { name: "继续未完成阶段" }),
   ).toBeEnabled();
+});
+
+test("keeps recording, analysis, generation and review in one flow and groups history by recording", async ({
+  page,
+  request,
+}) => {
+  const bundle = await (await request.post("/api/demo")).json();
+  const recording = {
+    id: `flow-${Date.now()}`,
+    caseName: "连续录制流程",
+    scenario: "完成录制到审核",
+    target: "http://127.0.0.1:3100",
+    environmentRef: "demo",
+    startedAt: Date.now(),
+    state: "RECORDING",
+    operations: [],
+    requests: [
+      {
+        id: "flow-request",
+        method: "GET",
+        url: "http://127.0.0.1:3100/api/orders",
+        resourceType: "fetch",
+        startedAt: 1,
+        query: {},
+        headers: {},
+        status: 200,
+        category: "BUSINESS",
+        keep: true,
+        operationCandidates: [],
+      },
+    ],
+    dependencies: [],
+  };
+  let created = false;
+  let generated = false;
+  const job = {
+    id: "flow-generation",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    state: "NEEDS_REVIEW",
+    provider: { name: "Fixture", version: "1" },
+    stages: [
+      {
+        id: "EVIDENCE",
+        state: "SUCCEEDED",
+        attempts: 1,
+        output: { requestIds: ["flow-request"] },
+      },
+    ],
+    testCase: bundle.testCase,
+    plan: bundle.plan,
+    input: { recording, assets: bundle.assets },
+  };
+  await page.route("**/api/recordings", async (route) => {
+    if (route.request().method() === "POST") {
+      created = true;
+      await route.fulfill({ json: recording });
+    } else await route.fulfill({ json: created ? [recording] : [] });
+  });
+  await page.route(`**/api/recordings/${recording.id}/stop`, (route) => {
+    recording.state = "STOPPED";
+    return route.fulfill({ json: recording });
+  });
+  await page.route(`**/api/recordings/${recording.id}/analyze`, (route) =>
+    route.fulfill({ json: { recording, assets: [] } }),
+  );
+  await page.route(`**/api/recordings/${recording.id}/analysis`, (route) =>
+    route.fulfill({ json: { recording, assets: [] } }),
+  );
+  await page.route("**/api/generations*", (route) => {
+    if (route.request().method() === "POST") {
+      generated = true;
+      return route.fulfill({ json: { id: job.id } });
+    }
+    return route.fulfill({ json: generated ? [job] : [] });
+  });
+  await page.goto("/");
+  const nav = page.locator("aside nav");
+  await expect(nav.getByRole("button")).toHaveCount(4);
+  await expect(nav.getByRole("button", { name: /分析|录制|环境/ })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "新建录制流程", exact: true }).click();
+  await page.getByLabel("用例名称", { exact: true }).fill(recording.caseName);
+  await page.getByLabel("测试场景", { exact: true }).fill(recording.scenario);
+  await page.getByRole("button", { name: "开始录制", exact: true }).click();
+  const progress = page.getByRole("list", { name: "用例流程进度" });
+  await expect(
+    progress.getByRole("button", { name: /录制操作/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await expect(page.getByLabel("当前工作区")).toBeDisabled();
+  await page.getByRole("button", { name: "停止并保存" }).click();
+  await expect(
+    progress.getByRole("button", { name: /分析筛选/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await expect(nav.getByRole("button", { name: /用例流程/ })).toHaveClass(
+    "active",
+  );
+  await page.getByRole("button", { name: "启动生成工作流" }).click();
+  await expect(
+    progress.getByRole("button", { name: /生成草稿/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await page.getByRole("button", { name: "打开草稿", exact: true }).click();
+  await expect(
+    progress.getByRole("button", { name: /审核与执行/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await expect(nav.getByRole("button", { name: /用例流程/ })).toHaveClass(
+    "active",
+  );
+  await nav.getByRole("button", { name: /历史记录/ }).click();
+  const row = page.getByRole("row").filter({ hasText: recording.caseName });
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("1 次生成");
+  await row
+    .getByRole("button", { name: `打开流程 ${recording.caseName}` })
+    .click();
+  await expect(
+    progress.getByRole("button", { name: /审核与执行/ }),
+  ).toHaveAttribute("aria-current", "step");
+});
+
+test("keeps workspace and recording history isolated and clears the previous flow when switching workspace", async ({
+  page,
+  request,
+}) => {
+  const bundle = await (await request.post("/api/demo")).json();
+  const suffix = Date.now();
+  const a = await (
+    await request.post("/api/workspaces", {
+      data: { name: `流程 A ${suffix}` },
+    })
+  ).json();
+  const b = await (
+    await request.post("/api/workspaces", {
+      data: { name: `流程 B ${suffix}` },
+    })
+  ).json();
+  const makeRecord = (id: string, workspaceId: string) => ({
+    id,
+    workspaceId,
+    caseName: id,
+    scenario: id,
+    target: "http://127.0.0.1:3100",
+    startedAt: Date.now(),
+    state: "STOPPED",
+    requests: [],
+    operations: [],
+  });
+  const recA = makeRecord("workspace-a-record", a.id),
+    recB = makeRecord("workspace-b-record", b.id),
+    recA2 = makeRecord("workspace-a-other", a.id);
+  const makeJob = (recording: typeof recA, state: string) => ({
+    id: `${recording.id}-job`,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    state,
+    stages: [],
+    provider: { name: "Fixture", version: "1" },
+    error: `${recording.id}-error`,
+    input: { recording, assets: [] },
+    ...(state === "NEEDS_REVIEW"
+      ? { testCase: bundle.testCase, plan: bundle.plan }
+      : {}),
+  });
+  // Return every job even for scoped requests, to exercise the UI's own scope checks too.
+  await page.route("**/api/generations*", (route) =>
+    route.fulfill({
+      json: [
+        makeJob(recA, "NEEDS_REVIEW"),
+        makeJob(recB, "FAILED"),
+        makeJob(recA2, "FAILED"),
+      ],
+    }),
+  );
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recA, recB, recA2] }),
+  );
+  await page.goto("/");
+  await page.getByLabel("当前工作区").selectOption(a.id);
+  await expect(
+    page.getByRole("button", { name: `打开流程 ${recB.caseName}` }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: `打开流程 ${recA.caseName}`, exact: true })
+    .click();
+  const progress = page.getByRole("list", { name: "用例流程进度" });
+  await expect(
+    progress.getByRole("button", { name: /审核与执行/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await page.getByLabel("当前工作区").selectOption(b.id);
+  await expect(
+    page.getByRole("heading", { name: bundle.testCase.name, exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    progress.getByRole("button", { name: /审核与执行/ }),
+  ).toBeDisabled();
+  await page
+    .locator("aside nav")
+    .getByRole("button", { name: /历史记录/ })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: `打开流程 ${recA.caseName}`,
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: `打开流程 ${recB.caseName}` }).click();
+  await expect(
+    page.getByText(`${recB.id}-error`, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(`${recA2.id}-error`, { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText(`${recA.id}-error`, { exact: true })).toHaveCount(
+    0,
+  );
 });

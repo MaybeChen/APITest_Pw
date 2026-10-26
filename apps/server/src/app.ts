@@ -200,6 +200,11 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
       return data;
     },
   );
+  app.get("/api/analyses", async () => store.latest("analysis"));
+  app.get<{ Params: { id: string } }>(
+    "/api/recordings/:id/analysis",
+    async (req) => (await store.get("analysis", req.params.id)) ?? null,
+  );
   app.post<{ Params: { id: string } }>(
     "/api/recordings/:id/analyze",
     async (req) => {
@@ -216,6 +221,13 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
         })
         .parse(req.body ?? {});
       const result = analyze(recordingSchema.parse(raw), filter);
+      const versions = await store.list<{ recording: Recording }>("analysis");
+      await store.put(
+        "analysis",
+        raw.id,
+        versions.filter((a) => a.recording.id === raw.id).length + 1,
+        result,
+      );
       return result;
     },
   );
@@ -256,12 +268,22 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     void startGeneration(job).catch((error: unknown) => app.log.error(error));
     return { id: job.id };
   });
-  app.get("/api/generations", async () =>
-    (await store.latest<Generation>("generation")).map((job) => ({
-      ...job,
-      active: activeGenerations.has(job.id),
-    })),
-  );
+  app.get("/api/generations", async (req) => {
+    const scope = z
+      .object({
+        workspaceId: z.string().min(1).optional(),
+        recordingId: z.string().min(1).optional(),
+      })
+      .parse(req.query);
+    return (await store.latest<Generation>("generation"))
+      .filter(
+        (job) =>
+          (!scope.workspaceId ||
+            job.input.recording.workspaceId === scope.workspaceId) &&
+          (!scope.recordingId || job.input.recording.id === scope.recordingId),
+      )
+      .map((job) => ({ ...job, active: activeGenerations.has(job.id) }));
+  });
   app.get<{ Params: { id: string } }>("/api/generations/:id", async (req) => {
     const job = await store.get<Generation>("generation", req.params.id);
     if (!job) throw new Error("生成任务不存在");

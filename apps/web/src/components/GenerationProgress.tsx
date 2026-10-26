@@ -24,10 +24,17 @@ function duration(start?: number, end?: number) {
 }
 export function GenerationProgress({
   onOpen,
+  workspaceId = "",
+  recordingId,
+  generationId,
 }: {
+  workspaceId?: string;
+  recordingId?: string;
+  generationId?: string;
   onOpen: (job: Generation) => void;
 }) {
   const [jobs, setJobs] = useState<(Generation & { active?: boolean })[]>([]);
+  const [selectedId, setSelectedId] = useState(generationId ?? "");
   const [error, setError] = useState("");
   const [resuming, setResuming] = useState<string>();
   useEffect(() => {
@@ -35,13 +42,24 @@ export function GenerationProgress({
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
-        const response = await fetch("/api/generations");
+        const response = await fetch(
+          `/api/generations?recordingId=${encodeURIComponent(recordingId!)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+        );
         if (!response.ok) throw new Error(await response.text());
         const data = (await response.json()) as (Generation & {
           active?: boolean;
         })[];
         if (!cancelled) {
-          setJobs(data);
+          setJobs(
+            data
+              .filter(
+                (job) =>
+                  job.input.recording.id === recordingId &&
+                  (!workspaceId ||
+                    job.input.recording.workspaceId === workspaceId),
+              )
+              .sort((a, b) => b.createdAt - a.createdAt),
+          );
           setError("");
         }
       } catch (error) {
@@ -50,12 +68,12 @@ export function GenerationProgress({
         if (!cancelled) timer = setTimeout(() => void refresh(), 1500);
       }
     };
-    void refresh();
+    if (recordingId) void refresh();
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []);
+  }, [workspaceId, recordingId, generationId]);
   const resume = async (job: Generation) => {
     setResuming(job.id);
     try {
@@ -84,126 +102,147 @@ export function GenerationProgress({
       {!jobs.length && (
         <p className="empty">暂无生成任务。分析录制后即可开始生成。</p>
       )}
-      {jobs.map((job) => {
-        const interrupted = job.state === "RUNNING" && job.active === false;
-        const current =
-          job.stages.find((s) => s.state === "RUNNING") ??
-          job.stages.find((s) => s.state === "FAILED");
-        const completed = job.stages.filter((s) =>
-          ["SUCCEEDED", "SKIPPED"].includes(s.state),
-        ).length;
-        return (
-          <article className="generation" key={job.id}>
-            <div className="row">
-              <strong>{job.input.recording.caseName}</strong>
-              <span
-                className={`badge ${job.state === "FAILED" ? "failed" : ""}`}
-              >
-                {interrupted ? "已中断，可继续" : labels[job.state]}
-              </span>
-            </div>
-            <p>
-              任务 {job.id.slice(0, 8)} · {job.provider.name} /{" "}
-              {job.provider.version}
-            </p>
-            <div className="generation-summary">
-              <span>
-                当前阶段：
-                <strong>
-                  {current
-                    ? labels[current.id]
-                    : job.state === "NEEDS_REVIEW"
-                      ? "生成完成，等待审核"
-                      : "等待执行"}
-                </strong>
-              </span>
-              <span>
-                总耗时：
-                {duration(
-                  job.createdAt,
-                  job.state === "RUNNING" && !interrupted
-                    ? undefined
-                    : job.updatedAt,
-                )}
-              </span>
-              <span>
-                进度：{completed} / {job.stages.length}
-              </span>
-            </div>
-            <progress
-              aria-label="生成阶段进度"
-              max={job.stages.length}
-              value={completed}
-            />
-            {job.error && (
-              <p role="alert" className="error">
-                {job.error}
-              </p>
-            )}
-            <ol className="generation-stages">
-              {job.stages.map((stage) => (
-                <li
-                  key={stage.id}
-                  className={`generation-stage ${stage.state.toLowerCase()}`}
+      {jobs.length > 1 && (
+        <label>
+          本次录制的生成历史
+          <select
+            value={selectedId || jobs[0].id}
+            onChange={(e) => setSelectedId(e.target.value)}
+          >
+            {jobs.map((job) => (
+              <option key={job.id} value={job.id}>
+                {new Date(job.createdAt).toLocaleString()} · {labels[job.state]}{" "}
+                · {job.id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {jobs
+        .filter((job) => job.id === (selectedId || jobs[0]?.id))
+        .map((job) => {
+          const interrupted = job.state === "RUNNING" && job.active === false;
+          const current =
+            job.stages.find((s) => s.state === "RUNNING") ??
+            job.stages.find((s) => s.state === "FAILED");
+          const completed = job.stages.filter((s) =>
+            ["SUCCEEDED", "SKIPPED"].includes(s.state),
+          ).length;
+          return (
+            <article className="generation" key={job.id}>
+              <div className="row">
+                <strong>{job.input.recording.caseName}</strong>
+                <span
+                  className={`badge ${job.state === "FAILED" ? "failed" : ""}`}
                 >
-                  <div className="row">
-                    <strong>{labels[stage.id]}</strong>
-                    <span>
-                      {labels[stage.state]} ·{" "}
-                      {duration(
-                        stage.startedAt,
-                        stage.state === "RUNNING"
-                          ? interrupted
-                            ? job.updatedAt
-                            : undefined
-                          : stage.endedAt,
-                      )}{" "}
-                      · 尝试 {stage.attempts}
-                    </span>
-                  </div>
-                  {stage.error && <pre className="error">{stage.error}</pre>}
-                  {stage.output !== undefined ? (
-                    <details>
-                      <summary>查看阶段产物</summary>
-                      <pre>{JSON.stringify(stage.output, null, 2)}</pre>
-                    </details>
-                  ) : (
-                    <small>
-                      {stage.state === "SKIPPED"
-                        ? "本阶段无需产物"
-                        : "尚无产物"}
-                    </small>
+                  {interrupted ? "已中断，可继续" : labels[job.state]}
+                </span>
+              </div>
+              <p>
+                录制 {job.input.recording.id} · 目标{" "}
+                {job.input.recording.target}
+                <br />
+                任务 {job.id.slice(0, 8)} · {job.provider.name} /{" "}
+                {job.provider.version}
+              </p>
+              <div className="generation-summary">
+                <span>
+                  当前阶段：
+                  <strong>
+                    {current
+                      ? labels[current.id]
+                      : job.state === "NEEDS_REVIEW"
+                        ? "生成完成，等待审核"
+                        : "等待执行"}
+                  </strong>
+                </span>
+                <span>
+                  总耗时：
+                  {duration(
+                    job.createdAt,
+                    job.state === "RUNNING" && !interrupted
+                      ? undefined
+                      : job.updatedAt,
                   )}
-                </li>
-              ))}
-            </ol>
-            {job.validation && (
-              <details open={job.validation.errors.length > 0}>
-                <summary>
-                  校验结果 · 阻塞 {job.validation.blockingErrors.length} ·
-                  待人工审核 {job.validation.reviewRequired.length}
-                </summary>
-                <pre>{JSON.stringify(job.validation, null, 2)}</pre>
-              </details>
-            )}
-            {job.state === "NEEDS_REVIEW" ? (
-              <button onClick={() => onOpen(job)}>打开草稿</button>
-            ) : (
-              <button
-                disabled={
-                  (job.state === "RUNNING" && !interrupted) ||
-                  resuming === job.id
-                }
-                onClick={() => void resume(job)}
-              >
-                {job.state === "RUNNING" && !interrupted
-                  ? "正在生成…"
-                  : "继续未完成阶段"}
-              </button>
-            )}
-          </article>
-        );
-      })}
+                </span>
+                <span>
+                  进度：{completed} / {job.stages.length}
+                </span>
+              </div>
+              <progress
+                aria-label="生成阶段进度"
+                max={job.stages.length}
+                value={completed}
+              />
+              {job.error && (
+                <p role="alert" className="error">
+                  {job.error}
+                </p>
+              )}
+              <ol className="generation-stages">
+                {job.stages.map((stage) => (
+                  <li
+                    key={stage.id}
+                    className={`generation-stage ${stage.state.toLowerCase()}`}
+                  >
+                    <div className="row">
+                      <strong>{labels[stage.id]}</strong>
+                      <span>
+                        {labels[stage.state]} ·{" "}
+                        {duration(
+                          stage.startedAt,
+                          stage.state === "RUNNING"
+                            ? interrupted
+                              ? job.updatedAt
+                              : undefined
+                            : stage.endedAt,
+                        )}{" "}
+                        · 尝试 {stage.attempts}
+                      </span>
+                    </div>
+                    {stage.error && <pre className="error">{stage.error}</pre>}
+                    {stage.output !== undefined ? (
+                      <details>
+                        <summary>查看阶段产物</summary>
+                        <pre>{JSON.stringify(stage.output, null, 2)}</pre>
+                      </details>
+                    ) : (
+                      <small>
+                        {stage.state === "SKIPPED"
+                          ? "本阶段无需产物"
+                          : "尚无产物"}
+                      </small>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {job.validation && (
+                <details open={job.validation.errors.length > 0}>
+                  <summary>
+                    校验结果 · 阻塞 {job.validation.blockingErrors.length} ·
+                    待人工审核 {job.validation.reviewRequired.length}
+                  </summary>
+                  <pre>{JSON.stringify(job.validation, null, 2)}</pre>
+                </details>
+              )}
+              {job.state === "NEEDS_REVIEW" ? (
+                <button onClick={() => onOpen(job)}>打开草稿</button>
+              ) : (
+                <button
+                  disabled={
+                    (job.state === "RUNNING" && !interrupted) ||
+                    resuming === job.id
+                  }
+                  onClick={() => void resume(job)}
+                >
+                  {job.state === "RUNNING" && !interrupted
+                    ? "正在生成…"
+                    : "继续未完成阶段"}
+                </button>
+              )}
+            </article>
+          );
+        })}
     </section>
   );
 }
