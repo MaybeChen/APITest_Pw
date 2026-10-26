@@ -1,3 +1,9 @@
+import {
+  taskMessages,
+  taskSchemas,
+  estimateTokens,
+  type PipelineTask,
+} from "./pipeline-contracts.js";
 import { businessFlowSchema, repairedSchema, type AIStage } from "./stages.js";
 import type { ModelLogger } from "./logging.js";
 import {
@@ -25,6 +31,7 @@ export interface PlannerInput {
   recording: Recording;
   assets: Asset[];
   environment: Environment;
+  authProfileRef?: string;
   caseId?: string;
   caseVersion?: number;
   planVersion?: number;
@@ -35,6 +42,16 @@ export interface ModelCallContext {
   stage?: string;
 }
 export interface AIProvider {
+  planningLimits?: {
+    inputBudget: number;
+    maxOutputTokens: number;
+    maxInterfacesPerBatch: number;
+  };
+  runTask?(
+    task: PipelineTask,
+    payload: unknown,
+    context: ModelCallContext,
+  ): Promise<unknown>;
   runStage?(
     stage: AIStage,
     input: PlannerInput,
@@ -50,6 +67,110 @@ export interface AIProvider {
 export class MockAIProvider implements AIProvider {
   name = "MockAIProvider";
   version = "1.0";
+  async runTask(
+    task: PipelineTask,
+    payload: unknown,
+    _context: ModelCallContext,
+  ): Promise<unknown> {
+    const data = payload as any;
+    if (task === "API_ORGANIZATION")
+      return {
+        interfaces: data.interfaces.map((item: any) => ({
+          apiId: item.apiId,
+          name: `Mock ${item.method} ${item.path}`,
+          description: `Mock：观察到的 ${item.method} ${item.path} 接口，业务含义请人工确认。`,
+          uncertainties: ["Mock 不具备真实业务理解能力"],
+        })),
+      };
+    if (task === "API_SELECTION")
+      return {
+        selected: data.interfaces.map((item: any) => ({
+          apiId: item.apiId,
+          role: "SCENARIO",
+          reason: "Mock 保守选择，需人工筛选",
+        })),
+        uncertainties: ["Mock 不执行真实场景筛选"],
+      };
+    if (task === "CASE_DESIGN")
+      return {
+        caseId: data.identity.caseId,
+        version: data.identity.caseVersion,
+        name: data.caseName,
+        objective: data.scenario,
+        preconditions: ["通过已配置 UI 认证", "确认所选接口及测试数据"],
+        inputRequirements: ["使用本次测试专属输入数据"],
+        steps: data.interfaces.map((item: any, i: number) => ({
+          id: `semantic-${i + 1}`,
+          title: item.name,
+          executionKind: "API",
+          inputs: [],
+          expected: "依据接口契约人工确认预期",
+          dependsOn: i ? [`semantic-${i}`] : [],
+          review: "NEEDS_REVIEW",
+        })),
+        expected: "场景满足用户确认后的预期",
+        planVersions: [data.identity.planVersion],
+        status: "DRAFT",
+      };
+    if (task === "PLAN_REPAIR")
+      return { replacements: [], reason: "Mock 不自动修复，请人工审核" };
+    const input: PlannerInput = {
+      assets: data.interfaces.map((item: any) => item.asset),
+      environment: data.environment,
+      caseId: data.testCase.caseId,
+      caseVersion: data.testCase.version,
+      planVersion: data.identity.planVersion,
+      recording: {
+        id: "mock-compact",
+        caseName: data.testCase.name,
+        scenario: data.scenario,
+        target: data.environment.baseURL,
+        notes: "",
+        startedAt: 0,
+        state: "STOPPED",
+        operations: [],
+        redactions: [],
+        dependencies: [],
+        requests: data.interfaces.map((item: any) => ({
+          id: item.asset.sources[0],
+          method: item.asset.method,
+          url: data.environment.baseURL + item.asset.pathTemplate,
+          resourceType: "fetch",
+          startedAt: 0,
+          headers: {},
+          query: {},
+          status: item.samples[0]?.status ?? 200,
+          category: "BUSINESS",
+          keep: true,
+          initiator: "UNKNOWN",
+          operationCandidates: [],
+        })),
+      },
+    };
+    const output = { ...(await this.generate(input)) } as {
+      testCase: TestCase;
+      plan: Plan;
+    };
+    output.plan.authProfileRef = data.authProfileRef;
+    output.plan.steps.forEach((step, i) => {
+      step.semanticStepRef =
+        data.testCase.steps.filter(
+          (s: any) => !s.executionKind || s.executionKind === "API",
+        )[i]?.id ?? data.testCase.steps[0].id;
+      const body = data.dataParameters.find(
+        (param: any) =>
+          param.apiId === step.apiId &&
+          param.location === "BODY" &&
+          param.path === "$",
+      );
+      if (body) {
+        step.body = { source: "TEST_DATA", name: body.name };
+        output.plan.parameters ??= {};
+        output.plan.parameters[body.name] = body.type;
+      }
+    });
+    return output.plan;
+  }
   async runStage(
     stage: AIStage,
     input: PlannerInput,
@@ -214,9 +335,42 @@ export class ModelAIProvider implements AIProvider {
       requester?: ModelRequester;
       close?: () => Promise<void>;
       logger?: ModelLogger;
+      planningLimits?: {
+        inputBudget: number;
+        maxOutputTokens: number;
+        maxInterfacesPerBatch: number;
+      };
     },
   ) {
     this.version = config.model;
+  }
+  get planningLimits() {
+    return (
+      this.config.planningLimits ?? {
+        inputBudget: 64000,
+        maxOutputTokens: 8192,
+        maxInterfacesPerBatch: 6,
+      }
+    );
+  }
+  async runTask(
+    task: PipelineTask,
+    payload: unknown,
+    context: ModelCallContext,
+  ) {
+    const messages = taskMessages(task, redact(payload));
+    if (estimateTokens(messages) + 1024 > this.planningLimits.inputBudget)
+      throw new Error(
+        `模型输入超过保守 token 预算 (${this.planningLimits.inputBudget})，请减少接口或缩小场景；不会发送超预算请求。`,
+      );
+    const content = await this.completion(
+      messages,
+      "planning",
+      { ...context, stage: task },
+      this.planningLimits.maxOutputTokens,
+    );
+    const fence = content.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return taskSchemas[task].parse(JSON.parse(fence ? fence[1] : content));
   }
   async close() {
     await this.config.close?.();
@@ -225,6 +379,7 @@ export class ModelAIProvider implements AIProvider {
     messages: { role: string; content: string }[],
     purpose: "planning" | "connectivity",
     context: ModelCallContext = { generationId: randomUUID(), attempt: 1 },
+    maxOutputTokens?: number,
   ): Promise<string> {
     const started = Date.now();
     const metadata = {
@@ -237,6 +392,7 @@ export class ModelAIProvider implements AIProvider {
     };
     const payload = {
       model: this.config.model,
+      ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
       ...(this.config.responseFormat === "none"
         ? {}
         : { response_format: { type: "json_object" } }),
@@ -291,6 +447,13 @@ export class ModelAIProvider implements AIProvider {
         throw modelConnectionError(error, this.config.endpoint);
       }
       log("response", json, res.status);
+      if (
+        maxOutputTokens &&
+        (json as any)?.choices?.[0]?.finish_reason === "length"
+      )
+        throw new Error(
+          "模型输出被长度限制截断，请减少本批接口/用例步骤或提高 maxOutputTokens。",
+        );
       const content = (
         json as { choices?: { message?: { content?: unknown } }[] }
       )?.choices?.[0]?.message?.content;

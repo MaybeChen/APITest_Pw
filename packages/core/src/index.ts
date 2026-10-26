@@ -211,6 +211,22 @@ export function resolve(
       throw new Error("Unresolved header requires review");
   }
 }
+function semanticApiDependencies(
+  c: TestCase,
+  id: string,
+  seen = new Set<string>(),
+): string[] {
+  if (seen.has(id)) return [];
+  seen.add(id);
+  return (c.steps.find((step) => step.id === id)?.dependsOn ?? []).flatMap(
+    (dependency) => {
+      const source = c.steps.find((step) => step.id === dependency);
+      return !source?.executionKind || source.executionKind === "API"
+        ? [dependency]
+        : semanticApiDependencies(c, dependency, seen);
+    },
+  );
+}
 export function validate(
   c: TestCase,
   p: Plan,
@@ -277,6 +293,9 @@ export function validate(
     );
     if (!sem.has(s.semanticStepRef))
       errors.push(`Invalid semanticStepRef ${s.id}`);
+    const semantic = c.steps.find((item) => item.id === s.semanticStepRef);
+    if (semantic?.executionKind && semantic.executionKind !== "API")
+      errors.push(`Non-API precondition cannot be an API node: ${s.id}`);
     if (!a || !a.validated) errors.push(`Unvalidated API Asset ${s.apiId}`);
     if (a) {
       if (
@@ -360,9 +379,7 @@ export function validate(
     if (new Set(s.resourceLocks ?? []).size !== (s.resourceLocks ?? []).length)
       errors.push(`Duplicate resource lock ${s.id}`);
     if (s.phase !== "CLEANUP")
-      for (const dependency of c.steps.find(
-        (item) => item.id === s.semanticStepRef,
-      )?.dependsOn ?? []) {
+      for (const dependency of semanticApiDependencies(c, s.semanticStepRef)) {
         if (
           ![...ancestors(s.id)].some(
             (id) => id !== s.id && byId.get(id)?.semanticStepRef === dependency,

@@ -184,11 +184,16 @@ export const caseSchema = z.object({
   objective: id,
   version: z.number().int().positive(),
   preconditions: z.array(z.string()),
+  inputRequirements: z.array(z.string()).optional(),
   steps: z
     .array(
       z.object({
         id,
         title: id,
+        executionKind: z
+          .enum(["API", "UI_PRECONDITION", "MANUAL_PRECONDITION"])
+          .optional(),
+        inputs: z.array(z.string()).optional(),
         expected: id,
         dependsOn: z.array(id),
         review: z.enum(["CONFIRMED", "NEEDS_REVIEW"]),

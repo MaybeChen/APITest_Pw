@@ -1,6 +1,14 @@
+import { PipelineReview, ScenarioFork } from "./PipelineReview";
 import { useEffect, useState } from "react";
 import type { Generation } from "../../../../packages/planner/src/workflow";
 const labels: Record<string, string> = {
+  API_ORGANIZATION: "分批整理接口",
+  API_SELECTION: "按场景推荐接口",
+  CASE_DESIGN: "生成语义用例",
+  PLAN_DESIGN: "生成接口调用计划",
+  PLAN_REPAIR: "局部修复调用节点",
+  WAITING_INTERFACE_REVIEW: "等待用户确认接口",
+  WAITING_CASE_REVIEW: "等待用户确认用例",
   EVIDENCE: "整理录制证据",
   BUSINESS_FLOW: "识别业务流程",
   SEMANTIC_CASE: "生成业务用例",
@@ -153,7 +161,7 @@ export function GenerationProgress({
                       ? labels[current.id]
                       : job.state === "NEEDS_REVIEW"
                         ? "生成完成，等待审核"
-                        : "等待执行"}
+                        : (labels[job.state] ?? "等待执行")}
                   </strong>
                 </span>
                 <span>
@@ -178,6 +186,68 @@ export function GenerationProgress({
                 <p role="alert" className="error">
                   {job.error}
                 </p>
+              )}
+              {job.pipelineVersion === 2 &&
+                ["WAITING_INTERFACE_REVIEW", "WAITING_CASE_REVIEW"].includes(
+                  job.state,
+                ) && (
+                  <PipelineReview
+                    key={`${job.id}:${job.state}`}
+                    job={job}
+                    onSubmitted={() =>
+                      setJobs((all) =>
+                        all.map((item) =>
+                          item.id === job.id
+                            ? { ...item, state: "RUNNING", active: true }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                )}
+              {job.pipelineVersion === 2 &&
+                job.state !== "RUNNING" &&
+                job.stages.find((s) => s.id === "API_ORGANIZATION")?.state ===
+                  "SUCCEEDED" && (
+                  <ScenarioFork
+                    key={job.id}
+                    job={job}
+                    onFork={async (id) => {
+                      const response = await fetch(`/api/generations/${id}`);
+                      if (!response.ok) throw new Error(await response.text());
+                      const next = (await response.json()) as Generation;
+                      setJobs((all) => [next, ...all]);
+                      setSelectedId(id);
+                    }}
+                  />
+                )}
+              {job.catalogSourceGenerationId && (
+                <p>
+                  接口目录复用自任务 {job.catalogSourceGenerationId.slice(0, 8)}
+                  。
+                </p>
+              )}
+              {job.pipelineVersion === 2 && (
+                <details>
+                  <summary>批次进度与输入预算</summary>
+                  <p>
+                    输入预算 {job.modelLimits?.inputBudget}；输出上限{" "}
+                    {job.modelLimits?.maxOutputTokens}{" "}
+                    token。输入为保守字节估算，实际 token 用量以模型日志 usage
+                    为准。
+                  </p>
+                  {[
+                    ...(job.organizationBatches ?? []),
+                    ...(job.selectionBatches ?? []),
+                  ].map((batch) => (
+                    <p key={batch.id}>
+                      {batch.id} · {batch.apiIds.length} 个接口 ·{" "}
+                      {labels[batch.state]} · 尝试 {batch.attempts} · 输入估算{" "}
+                      {batch.inputEstimate}
+                      {batch.error && ` · ${batch.error}`}
+                    </p>
+                  ))}
+                </details>
               )}
               <ol className="generation-stages">
                 {job.stages.map((stage) => (
@@ -227,7 +297,9 @@ export function GenerationProgress({
               )}
               {job.state === "NEEDS_REVIEW" ? (
                 <button onClick={() => onOpen(job)}>打开草稿</button>
-              ) : (
+              ) : ["WAITING_INTERFACE_REVIEW", "WAITING_CASE_REVIEW"].includes(
+                  job.state,
+                ) ? null : (
                 <button
                   disabled={
                     (job.state === "RUNNING" && !interrupted) ||

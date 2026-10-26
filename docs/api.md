@@ -14,7 +14,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 | GET /api/recordings/:id                               | 当前会话与事实证据                                                             |
 | POST /api/recordings/:id/stop                         | 停止并持久化                                                                   |
 | POST /api/recordings/:id/analyze                      | 过滤与分析，返回 recording、assets                                             |
-| POST /api/generate                                    | 从 `{recording, assets, environmentRef}` 生成双产物                            |
+| POST /api/generate                                    | 旧版同步兼容生成，界面使用 /api/generations                                    |
 | GET, POST /api/drafts                                 | 草稿历史和追加保存修订                                                         |
 | POST /api/demo                                        | 返回明确的本地演示契约草稿                                                     |
 | POST /api/validate                                    | 校验 `{testCase, plan, assets}`，返回 errors                                   |
@@ -206,12 +206,12 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 
 生成工作流 API：
 
-- `POST /api/generations`：`{recording, environmentRef}`，立即返回 `{id}`，后台执行阶段。
+- `POST /api/generations`：`{recording, environmentRef, pipelineVersion?:2, authProfileRef?}`，默认新版四阶段流程，立即返回 `{id}`，后台执行至下一人工确认点。显式 `pipelineVersion:1` 可创建兼容任务。
 - `GET /api/generations`：读取各任务最新修订；`GET /api/generations/:id`：读取单个任务、阶段输入引用、输出、尝试次数和校验结果。
 - `POST /api/generations/:id/resume`：恢复失败或服务重启中断的任务，复用成功阶段，继续使用原始证据快照。模型名称/版本必须相同。活动任务不会重复启动。
-- `POST /api/generate`：兼容同步调用，内部执行同一工作流，返回 `{testCase, plan, assets, workflow}`。
+- `POST /api/generate`：保留旧版同步工作流兼容调用，返回 `{testCase, plan, assets, workflow}`；不具备新版人工确认点，界面使用 `/api/generations`。
 
-生成状态为 RUNNING、FAILED、NEEDS_REVIEW；每次阶段变更存为独立 SQLite 修订。NEEDS_REVIEW 表示生成结束，仍可能有阻塞校验错误，必须修正并审核才能批准运行。每个模型阶段最多尝试两次；确定性校验后最多执行一个修复阶段。
+生成状态为 RUNNING、FAILED、NEEDS_REVIEW，新版另有 WAITING_INTERFACE_REVIEW、WAITING_CASE_REVIEW；每次阶段变更存为独立 SQLite 修订。NEEDS_REVIEW 表示生成结束，仍可能有阻塞校验错误，必须修正并审核才能批准运行。每个模型阶段最多尝试两次；确定性校验后最多执行一个修复阶段。
 
 ## 同一调用流程执行多组测试数据
 
@@ -273,3 +273,16 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 - `GET /api/generations?workspaceId=...&recordingId=...` 同时按工作区及录制筛选任务；未传筛选条件时保留全部历史查询。流程页仅展示当前录制关联的生成任务与校验结果。
 
 生成用例的工作区由录制证据确定，不采用模型输出中的工作区字段。已有任务的版本、依赖、归属绑定等真实校验错误仍保留在对应任务下。
+
+## 新版四阶段确认协议
+
+所有确认/重新推荐请求都必须携带最新 `revision`。过期修订或任务正在运行时返回 409；失败与中断任务可 resume，两个人工确认点不能被 resume 绕过。
+
+1. 创建任务后按预算分批整理接口，再按场景推荐，进入 `WAITING_INTERFACE_REVIEW`。`catalog` 保存全部接口及采集事实；`recommendations` 保存推荐 ID、角色和原因；`selectedApiIds` 为默认勾选。`organizationBatches`、`selectionBatches` 记录每批状态、尝试次数和输入估算。非推荐接口仍可手动选择。
+2. `POST /api/generations/:id/scenario`：`{revision,scenario}`，复用整理结果重新推荐接口，不重跑第一步。适用于接口确认前。
+3. `POST /api/generations/:id/interfaces`：`{revision,selectedApiIds,scenario,acknowledgeDependencies?:false,confirmed:true}`，确认接口后生成语义用例，进入 `WAITING_CASE_REVIEW`。如果遗漏候选依赖的来源接口，需选择来源接口或明确 `acknowledgeDependencies:true`；此提示不代表采集值匹配已证明业务依赖。
+4. `POST /api/generations/:id/case`：`{revision,testCase,authProfileRef,confirmed:true}`。用户可编辑前置条件、inputRequirements、步骤 title/inputs/expected 和 executionKind（API/UI_PRECONDITION/MANUAL_PRECONDITION），不得改变身份、工作区和版本。确认后才生成调用计划。认证引用必须是已配置的 AuthProfile。
+5. 计划生成、校验及可选局部修复后进入 `NEEDS_REVIEW`。`plan` 为调用 DAG，`datasetCandidate` 为从原始脱敏采集数据提取的独立候选数据集。仍须审核参数、断言、资源清理和资产，再使用既有 `/api/approve` 和 `/api/datasets` 保存。审批不会因进入 NEEDS_REVIEW 而自动通过。
+6. `POST /api/generations/:id/fork-scenario`：`{revision,scenario}`。已完成接口整理的非活动任务可复用目录创建另一个场景任务，返回新 `{id}`；原任务不修改，`catalogSourceGenerationId` 记录复用来源，新 Case 身份独立。
+
+模型调用次数通常为“接口整理批次数 + 场景筛选批次数 + 语义用例 1 次 + 调用计划 1 次”，另可能有 1 次局部修复；每个模型批次/阶段最多尝试 2 次。确认等待期间与回放期间不调用模型。目录/样例压缩仅影响模型输入，不能当作执行数据；超过阶段预算会明确报错，请缩小场景或所选接口范围。

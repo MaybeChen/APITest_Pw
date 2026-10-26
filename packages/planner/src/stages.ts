@@ -50,7 +50,14 @@ export type AIStage =
   "BUSINESS_FLOW" | "SEMANTIC_CASE" | "EXECUTION_PLAN" | "REPAIR";
 export type BusinessFlow = z.infer<typeof businessFlowSchema>;
 export const generationStageSchema = z.object({
-  id: z.enum(stageIds),
+  id: z.enum([
+    ...stageIds,
+    "API_ORGANIZATION",
+    "API_SELECTION",
+    "CASE_DESIGN",
+    "PLAN_DESIGN",
+    "PLAN_REPAIR",
+  ]),
   state: z.enum(["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "SKIPPED"]),
   attempts: z.number().int().nonnegative(),
   startedAt: z.number().optional(),

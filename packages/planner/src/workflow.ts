@@ -1,3 +1,4 @@
+import { pipelineFields } from "./pipeline-contracts.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -21,9 +22,16 @@ import {
 } from "./stages.js";
 import { ModelConnectionError } from "./connection.js";
 export const generationSchema = z.object({
+  ...pipelineFields,
   id: z.string(),
   revision: z.number().int().positive(),
-  state: z.enum(["RUNNING", "FAILED", "NEEDS_REVIEW"]),
+  state: z.enum([
+    "RUNNING",
+    "FAILED",
+    "NEEDS_REVIEW",
+    "WAITING_INTERFACE_REVIEW",
+    "WAITING_CASE_REVIEW",
+  ]),
   provider: z.object({ name: z.string(), version: z.string() }),
   createdAt: z.number(),
   updatedAt: z.number(),
@@ -318,7 +326,12 @@ export function generationBundle(job: Generation) {
   return {
     testCase: job.testCase,
     plan: job.plan,
-    assets: job.input.assets,
+    assets:
+      job.pipelineVersion === 2
+        ? job
+            .catalog!.filter((item) => job.selectedApiIds!.includes(item.apiId))
+            .map((item) => item.asset)
+        : job.input.assets,
     workflow: job,
   };
 }

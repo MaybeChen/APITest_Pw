@@ -505,3 +505,29 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.pipeline-review {
+  border: 2px solid #8fb7a5;
+  border-radius: 10px;
+  padding: 22px;
+  margin: 20px 0;
+  background: #f7faf6;
+}
+.catalog-item {
+  background: white;
+  border: 1px solid #dfe6de;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+}
+.interface-choice,
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.interface-choice code {
+  color: #687c72;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

@@ -10,5 +10,10 @@
     "console": true,
     "file": "../.data/logs/model.jsonl",
     "maxChars": 64000
+  },
+  "planningLimits": {
+    "inputBudget": 64000,
+    "maxOutputTokens": 8192,
+    "maxInterfacesPerBatch": 6
   }
 }

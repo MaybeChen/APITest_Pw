@@ -707,3 +707,188 @@ test("keeps workspace and recording history isolated and clears the previous flo
     0,
   );
 });
+
+test("reviews recommended interfaces and edited semantic expectations before generating a plan with separate captured data", async ({
+  page,
+  request,
+}) => {
+  const bundle = await (await request.post("/api/demo")).json();
+  const recording = {
+    id: "review-pipeline-record",
+    caseName: "四阶段确认流程",
+    scenario: "创建订单",
+    target: "http://127.0.0.1:3100",
+    startedAt: Date.now(),
+    state: "STOPPED",
+    requests: [],
+    operations: [],
+  };
+  const job: any = {
+    id: "review-pipeline-job",
+    revision: 10,
+    pipelineVersion: 2,
+    state: "WAITING_INTERFACE_REVIEW",
+    scenario: "创建订单",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    provider: { name: "Fixture", version: "2" },
+    modelLimits: {
+      inputBudget: 64000,
+      maxOutputTokens: 8192,
+      maxInterfacesPerBatch: 6,
+    },
+    input: {
+      recording,
+      assets: bundle.assets,
+      environment: { id: "demo" },
+      caseId: bundle.testCase.caseId,
+    },
+    stages: [
+      { id: "API_ORGANIZATION", state: "SUCCEEDED", attempts: 1 },
+      { id: "API_SELECTION", state: "SUCCEEDED", attempts: 1 },
+      { id: "CASE_DESIGN", state: "PENDING", attempts: 0 },
+      { id: "PLAN_DESIGN", state: "PENDING", attempts: 0 },
+    ],
+    catalog: bundle.assets.slice(0, 2).map((asset: any, i: number) => ({
+      apiId: asset.apiId,
+      name: i === 0 ? "创建订单接口" : "查询订单接口",
+      description: i === 0 ? "提交名称创建订单" : "查询指定订单",
+      uncertainties: [],
+      asset,
+      customHeaders: {
+        "x-team": {
+          binding: { source: "STATIC", value: "team-a" },
+          sample: "team-a",
+        },
+      },
+      samples: [
+        {
+          requestId: `recorded-${i}`,
+          query: {},
+          body: { name: "采集的订单名称" },
+          status: 201,
+          response: { id: "captured-id" },
+        },
+      ],
+      omittedSamples: 0,
+    })),
+    selectedApiIds: ["create", "detail"],
+    recommendations: {
+      selected: [
+        { apiId: "create", role: "SCENARIO", reason: "用于创建订单" },
+        { apiId: "detail", role: "DEPENDENCY", reason: "用于确认订单" },
+      ],
+      uncertainties: [],
+    },
+    authProfileRef: "demo-auth",
+  };
+  const submissions: any[] = [];
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recording] }),
+  );
+  await page.route("**/api/generations*", (route) =>
+    route.fulfill({ json: [job] }),
+  );
+  await page.route(
+    "**/api/generations/review-pipeline-job/interfaces",
+    async (route) => {
+      const data = route.request().postDataJSON();
+      submissions.push({ phase: "interfaces", data });
+      job.selectedApiIds = data.selectedApiIds;
+      job.selectionConfirmed = true;
+      job.state = "WAITING_CASE_REVIEW";
+      job.revision++;
+      job.testCase = {
+        ...bundle.testCase,
+        inputRequirements: ["使用专属名称"],
+        steps: [
+          {
+            ...bundle.testCase.steps[0],
+            executionKind: "API",
+            inputs: ["订单名称"],
+          },
+        ],
+      };
+      await route.fulfill({ json: { id: job.id } });
+    },
+  );
+  await page.route(
+    "**/api/generations/review-pipeline-job/case",
+    async (route) => {
+      const data = route.request().postDataJSON();
+      submissions.push({ phase: "case", data });
+      job.testCase = data.testCase;
+      job.caseConfirmed = true;
+      job.state = "NEEDS_REVIEW";
+      job.revision++;
+      job.plan = {
+        ...bundle.plan,
+        parameters: { order_body: "object" },
+        steps: [
+          {
+            ...bundle.plan.steps[0],
+            body: { source: "TEST_DATA", name: "order_body" },
+          },
+        ],
+      };
+      job.datasetCandidate = {
+        id: "captured-data",
+        name: "采集候选数据",
+        planId: job.plan.planId,
+        planVersion: job.plan.version,
+        version: 1,
+        rows: [
+          {
+            id: "recorded",
+            name: "录制样例",
+            values: { order_body: { name: "采集的订单名称" } },
+          },
+        ],
+      };
+      await route.fulfill({ json: { id: job.id } });
+    },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
+  await page.getByRole("button", { name: "打开流程 四阶段确认流程" }).click();
+  await expect(
+    page.getByRole("heading", { name: "确认场景接口" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("checkbox", { name: "选择接口 create", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "选择接口 detail", exact: true }),
+  ).toBeChecked();
+  await page
+    .getByRole("checkbox", { name: "选择接口 detail", exact: true })
+    .uncheck();
+  await expect(page.getByText("查询订单接口", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "打开草稿", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "确认接口，生成语义用例", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "确认语义测试用例" }),
+  ).toBeVisible();
+  expect(submissions[0].data.selectedApiIds).toEqual(["create"]);
+  await page
+    .getByRole("textbox", { name: "预期结果", exact: true })
+    .fill("人工确认：订单创建成功");
+  await expect(
+    page.getByRole("button", { name: "确认用例，生成调用计划" }),
+  ).toBeDisabled();
+  await page
+    .getByRole("checkbox", { name: "我已确认前置条件、输入步骤及预期结果" })
+    .check();
+  await page.getByRole("button", { name: "确认用例，生成调用计划" }).click();
+  await page.getByRole("button", { name: "打开草稿", exact: true }).click();
+  expect(submissions[1].data.testCase.steps[0].expected).toBe(
+    "人工确认：订单创建成功",
+  );
+  await expect(page.getByLabel("数据组（JSON 数组）")).toHaveValue(
+    /采集的订单名称/,
+  );
+});

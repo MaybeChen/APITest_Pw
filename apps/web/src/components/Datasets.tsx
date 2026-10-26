@@ -18,7 +18,9 @@ export function Datasets({
   onChange,
   onReports,
   busy,
+  candidate,
 }: {
+  candidate?: Dataset;
   plan: Plan;
   onChange: (plan: Plan) => void;
   onReports: (reports: Report[]) => void;
@@ -27,9 +29,11 @@ export function Datasets({
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selected, setSelected] = useState("");
   const [rows, setRows] = useState(
-    '[{"id":"row-1","name":"数据 1","values":{}}]',
+    candidate
+      ? JSON.stringify(candidate.rows, null, 2)
+      : '[{"id":"row-1","name":"数据 1","values":{}}]',
   );
-  const [name, setName] = useState("测试数据");
+  const [name, setName] = useState(candidate?.name ?? "测试数据");
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState("");

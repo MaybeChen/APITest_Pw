@@ -34,6 +34,17 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
     apiKeyEnv: z.string().min(1).optional(),
     caFile: z.string().min(1).optional(),
     ignoreHTTPSErrors: z.boolean().default(false),
+    planningLimits: z
+      .object({
+        inputBudget: z.number().int().min(16000).max(200000).default(64000),
+        maxOutputTokens: z.number().int().min(512).max(16384).default(8192),
+        maxInterfacesPerBatch: z.number().int().min(1).max(30).default(6),
+      })
+      .default({
+        inputBudget: 64000,
+        maxOutputTokens: 8192,
+        maxInterfacesPerBatch: 6,
+      }),
     logging: z
       .object({
         enabled: z.boolean().default(false),
@@ -91,6 +102,7 @@ export function createConfiguredAIProvider(
   });
   return new ModelAIProvider({
     endpoint,
+    planningLimits: config.planningLimits,
     logger: createModelLogger(
       {
         ...config.logging,

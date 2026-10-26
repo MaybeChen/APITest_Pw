@@ -13,6 +13,7 @@ import type {
   Report,
   Environment,
   AuthProfile,
+  Dataset,
 } from "../../../packages/contracts/src/index";
 import "./style.css";
 import {
@@ -63,6 +64,7 @@ function App() {
     [generations, setGenerations] = useState<Generation[]>([]),
     [analyses, setAnalyses] = useState<Analysis[]>([]),
     [generationId, setGenerationId] = useState<string>(),
+    [datasetCandidate, setDatasetCandidate] = useState<Dataset>(),
     [aiProvider, setAIProvider] = useState<{
       provider: string;
       model: string;
@@ -117,6 +119,7 @@ function App() {
     setReport(undefined);
     setSelection("");
     setGenerationId(undefined);
+    setDatasetCandidate(undefined);
     setError("");
     setNotice("");
     setFlowTab("浏览器录制");
@@ -151,6 +154,7 @@ function App() {
         if (!r.environmentRef)
           setEnvironmentRef(job.input.environment?.id ?? environmentRef);
         setGenerationId(job.id);
+        setDatasetCandidate(job.datasetCandidate);
         if (job.testCase && job.plan && job.state === "NEEDS_REVIEW") {
           const draft = drafts.find(
             (d) => d.testCase.caseId === job.testCase!.caseId,
@@ -173,7 +177,14 @@ function App() {
               : (draft ?? {
                   testCase: job.testCase,
                   plan: job.plan,
-                  assets: job.input.assets,
+                  assets:
+                    job.pipelineVersion === 2
+                      ? job
+                          .catalog!.filter((item) =>
+                            job.selectedApiIds!.includes(item.apiId),
+                          )
+                          .map((item) => item.asset)
+                      : job.input.assets,
                 }),
           );
           setTab("用例编辑");
@@ -766,8 +777,7 @@ function App() {
             ) : (
               <>
                 <p>
-                  当前展示的是规则分析，不是大模型分析。非 /api/ 路径的
-                  Fetch/XHR 默认保留为待确认接口，生成双产物草稿时才调用模型。
+                  当前展示的是规则分析，不是大模型分析。下一步将分批整理接口并按场景推荐；确认接口后生成语义用例，确认用例后才生成调用计划。
                 </p>
                 <form
                   onSubmit={(e) => {
@@ -923,10 +933,19 @@ function App() {
               workspaceId={workspaceId}
               onOpen={(job) => {
                 if (job.testCase && job.plan) {
+                  setGenerationId(job.id);
+                  setDatasetCandidate(job.datasetCandidate);
                   edit({
                     testCase: job.testCase,
                     plan: job.plan,
-                    assets: job.input.assets,
+                    assets:
+                      job.pipelineVersion === 2
+                        ? job
+                            .catalog!.filter((item) =>
+                              job.selectedApiIds!.includes(item.apiId),
+                            )
+                            .map((item) => item.asset)
+                        : job.input.assets,
                   });
                   setTab("用例编辑");
                 }
@@ -1109,6 +1128,12 @@ function App() {
                 <Datasets
                   key={`${bundle.plan.planId}:${bundle.plan.version}`}
                   plan={bundle.plan}
+                  candidate={
+                    datasetCandidate?.planId === bundle.plan.planId &&
+                    datasetCandidate.planVersion === bundle.plan.version
+                      ? datasetCandidate
+                      : undefined
+                  }
                   busy={busy}
                   onChange={(plan) =>
                     edit({

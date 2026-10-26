@@ -1,3 +1,11 @@
+import {
+  createPipeline,
+  forkPipeline,
+  executePipeline,
+  confirmInterfaces,
+  confirmCase,
+  resetScenario,
+} from "../../../packages/planner/src/pipeline.js";
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUI from "@fastify/swagger-ui";
@@ -236,21 +244,28 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     await store.put("generation", job.id, job.revision, job);
   };
   const startGeneration = (job: Generation) => {
-    const promise = executeGeneration(job, aiProvider, saveGeneration).finally(
-      () => activeGenerations.delete(job.id),
-    );
+    const promise = (
+      job.pipelineVersion === 2
+        ? executePipeline(job, aiProvider, saveGeneration)
+        : executeGeneration(job, aiProvider, saveGeneration)
+    ).finally(() => activeGenerations.delete(job.id));
     activeGenerations.set(job.id, promise);
     return promise;
   };
-  const newGeneration = async (body: unknown) => {
+  const newGeneration = async (body: unknown, legacy = false) => {
     const b = z
       .object({
         recording: recordingSchema,
+        pipelineVersion: z.union([z.literal(1), z.literal(2)]).default(2),
+        authProfileRef: z.string().optional(),
         environmentRef: z.string().default("demo"),
       })
       .parse(body);
-    const job = createGeneration(
+    const job = (
+      legacy || b.pipelineVersion === 1 ? createGeneration : createPipeline
+    )(
       {
+        authProfileRef: b.authProfileRef,
         recording: b.recording,
         assets: [],
         environment: await envFor(b.environmentRef),
@@ -261,7 +276,9 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     return job;
   };
   app.post("/api/generate", async (req) =>
-    generationBundle(await startGeneration(await newGeneration(req.body))),
+    generationBundle(
+      await startGeneration(await newGeneration(req.body, true)),
+    ),
   );
   app.post("/api/generations", async (req) => {
     const job = await newGeneration(req.body);
@@ -300,11 +317,114 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
       )
         throw new Error("模型名称或版本已改变，请创建新的生成任务。");
       if (activeGenerations.has(job.id)) return { id: job.id };
-      if (job.state === "NEEDS_REVIEW") return { id: job.id };
+      if (
+        [
+          "NEEDS_REVIEW",
+          "WAITING_INTERFACE_REVIEW",
+          "WAITING_CASE_REVIEW",
+        ].includes(job.state)
+      )
+        return { id: job.id };
       void startGeneration(job).catch((error: unknown) => app.log.error(error));
       return { id: job.id };
     },
   );
+  const generationActions = new Set<string>();
+  for (const action of [
+    "interfaces",
+    "case",
+    "scenario",
+    "fork-scenario",
+  ] as const) {
+    app.post<{ Params: { id: string } }>(
+      `/api/generations/:id/${action}`,
+      async (req, reply) => {
+        const id = req.params.id;
+        if (activeGenerations.has(id) || generationActions.has(id))
+          return reply
+            .code(409)
+            .send({ error: "任务正在运行，请等待当前阶段完成" });
+        generationActions.add(id);
+        try {
+          const job = await store.get<Generation>("generation", id);
+          if (!job) return reply.code(404).send({ error: "生成任务不存在" });
+          const body = z
+            .object({ revision: z.number().int().positive() })
+            .passthrough()
+            .parse(req.body);
+          if (body.revision !== job.revision)
+            return reply
+              .code(409)
+              .send({ error: "任务已更新，请刷新后重新确认" });
+          if (action === "fork-scenario") {
+            const next = forkPipeline(
+              job,
+              z.object({ scenario: z.string().min(1).max(6000) }).parse(body)
+                .scenario,
+              aiProvider,
+            );
+            await saveGeneration(next);
+            void startGeneration(next).catch((error: unknown) =>
+              app.log.error(error),
+            );
+            return { id: next.id };
+          }
+          if (action === "interfaces") {
+            const value = z
+              .object({
+                selectedApiIds: z.array(z.string()).min(1),
+                scenario: z.string().min(1).max(6000),
+                acknowledgeDependencies: z.boolean().default(false),
+                confirmed: z.literal(true),
+              })
+              .parse(body);
+            confirmInterfaces(
+              job,
+              value.selectedApiIds,
+              value.scenario,
+              value.acknowledgeDependencies,
+            );
+          } else if (action === "case") {
+            const value = z
+              .object({
+                testCase: caseSchema,
+                authProfileRef: z.string().min(1),
+                confirmed: z.literal(true),
+              })
+              .parse(body);
+            const profile = await store.get<AuthProfile>(
+              "auth",
+              value.authProfileRef,
+            );
+            if (!profile) throw new Error("所选 UI 认证协议尚未配置");
+            confirmCase(job, value.testCase);
+            job.authProfileRef = value.authProfileRef;
+            job.authContract = {
+              availableContexts: Object.keys(profile.tokenSources),
+              headers: profile.headers,
+            };
+          } else {
+            resetScenario(
+              job,
+              z.object({ scenario: z.string().min(1).max(6000) }).parse(body)
+                .scenario,
+            );
+          }
+          job.state = "RUNNING";
+          delete job.error;
+          job.revision++;
+          job.updatedAt = Date.now();
+          await saveGeneration(job);
+          void startGeneration(job).catch((error: unknown) =>
+            app.log.error(error),
+          );
+          return { id: job.id };
+        } finally {
+          generationActions.delete(id);
+        }
+      },
+    );
+  }
   app.post("/api/demo", async () => demoArtifacts(randomUUID()));
   const bundle = z.object({
     testCase: caseSchema,

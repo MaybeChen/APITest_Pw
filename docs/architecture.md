@@ -8,7 +8,7 @@ React 审查界面 → Fastify API → 独立的 recorder / planner / runner →
 - core：脱敏、JSON 路径、绑定、DAG 排序和 Plan Validator。
 - recorder：Playwright 浏览器事件、DOM 证据、网络采集、规则分类和候选依赖。
 - planner：Mock / OpenAI 兼容 Provider，双产物 Schema 校验和有限输出重试。
-- runner：声明式 UI 认证、关联 APIRequestContext、串行调度、断言、资源台账与 always cleanup。
+- runner：声明式 UI 认证、关联 APIRequestContext、依赖调度、安全只读并发、断言、资源台账与 always cleanup。
 - storage：Drizzle SQLite 文档表，使用 kind 区分领域对象、复合 ID 隔离版本；批准通过数据库事务写入。
 - apps：React 审核 UI、Fastify API 和独立订单演示应用。
 
@@ -50,7 +50,7 @@ allowedOrigins 支持精确 origin 字符串和 hostnameRegex 对象规则，任
 
 ## 分阶段生成、页面证据与执行 DAG
 
-生成现在使用 EVIDENCE → BUSINESS_FLOW → SEMANTIC_CASE → EXECUTION_PLAN → VALIDATION；有阻塞错误时进入 REPAIR → FINAL_VALIDATION。每个阶段保存独立状态、输出和尝试次数。恢复任务复用成功产物，不重复全部模型调用。模型调用日志携带 stage 和 generationId。修复不改变环境权限，所有产物均为待审核草稿；无法修复的错误保留在校验结果中。
+新版任务（pipelineVersion=2）使用 API_ORGANIZATION → API_SELECTION → 人工确认接口 → CASE_DESIGN → 人工确认用例 → PLAN_DESIGN → VALIDATION；有阻塞错误时可进入 PLAN_REPAIR → FINAL_VALIDATION。接口整理按数量及输入预算分批，超大目录的场景筛选也分批。旧版任务仍使用 EVIDENCE → BUSINESS_FLOW → SEMANTIC_CASE → EXECUTION_PLAN。每个阶段保存独立状态、输出和尝试次数。恢复任务复用成功产物，不重复全部模型调用。模型调用日志携带 stage 和 generationId。修复不改变环境权限，所有产物均为待审核草稿；无法修复的错误保留在校验结果中。
 
 录制在 click/change/submit 前、及操作后约 200ms 保存页面语义摘要：标题、可见标题、附近表单/区域、最多 24 个控件的标签与状态。最多 1000 份摘要、合计 2MiB；不采集输入值，不保存完整 DOM 或截图。请求与摘要通过操作候选关联，仍是 1.5 秒窗口、置信度 0.4 的待确认关联，不能证明因果。参数候选使用前序响应的嵌套 ID 字段与后续路径段、Query、嵌套 Body 的精确值匹配，禁止子串匹配；业务依赖仍需人工确认。
 
@@ -59,3 +59,15 @@ Plan 支持 `execution.maxConcurrency`（1–8，默认 1）、节点 `parallelS
 RESPONSE_VARIABLE 可声明 `fromStep`、`expectedType`，生产节点通过 `extract` 和 `extractTypes` 给出路径与类型。`bodyBindings` 支持嵌套 JSON 路径，禁止原型属性；运行时检查提取和绑定类型。校验器检查来源节点、上游依赖、声明类型及语义依赖。界面显示 DAG、参数绑定和页面证据，细节可在 JSON 编辑中修改。
 
 浏览器录制脚本独立存放于 `packages/recorder/src/browser-recorder.js`，通过 Playwright `addInitScript({path})` 加载，不序列化经 tsx 转换的 TypeScript 回调，避免 `__name` 等 Node 侧编译辅助函数在页面中缺失。脚本覆盖同一 BrowserContext 内的页面、iframe 和弹窗；`contextCapture.initializedFrames` 记录页面/框架脚本就绪次数（包含刷新），`rejectedEvents` 记录未通过数据校验的事件数。录制界面展示操作、页面摘要数量与就绪次数，空操作时提示检查。刷新/关闭中的绑定失效不会产生未处理 Promise 错误。
+
+## 四阶段模型输入边界
+
+接口资产由采集事实构建，模型只填写名称、描述和不确定项，不能改写 Header/入参/出参事实。每批接口只包含最多 3 种代表请求形态、最多 2 份候选 DOM 摘要以及对应操作；样例按数组、字符串、深度和字段数限制压缩，原始录制仍完整保留。采集样例不是正式契约。每批必须原样、唯一地返回该批所有接口 ID。
+
+API_SELECTION 仅发送场景和接口 ID、名称、描述、method/path、操作类型。CASE_DESIGN 仅发送用户选择的接口摘要、场景和身份信息，不发送全部 DOM/响应。PLAN_DESIGN 仅发送已确认用例、所选接口结构/压缩样例、相关候选依赖和有采集来源的数据参数目录。身份、版本、环境、认证引用和草稿状态由程序固定。调用计划另接收已配置认证协议的可用上下文名称和 Header 绑定，不读取凭证值；引用未提供的认证上下文会产生阻塞错误。
+
+WAITING_INTERFACE_REVIEW / WAITING_CASE_REVIEW 为持久化状态。确认接口必须为当前目录中的非空唯一集合；取消候选参数依赖的来源接口时需明确确认。确认用例必须校验身份、版本、工作区和依赖 DAG；UI/人工前置条件不强制生成 API 节点，但其中的 API 上游依赖仍需落实。确认请求检查 revision，并拒绝活动任务的并发修改。resume 不会绕过确认点。
+
+数据参数值从原始脱敏录制中提取，不采用压缩样例作为真实执行值；敏感或被省略的数据不能成为候选值。计划以 TEST_DATA 引用参数，独立候选 Dataset 绑定精确计划版本，审批后可保存并编辑多组数据。JSON/HTTP 预期仍需人工审核。局部修复只可替换指定范围内的既有执行节点，不改变用户确认的 Case、参数声明或环境权限；修复失败保留草稿与真实校验错误。
+
+输入预算使用序列化提示的 UTF-8 字节数加余量做保守 token 估算，覆盖系统 Schema；超出预算直接拒绝请求。该估算不是服务实际 usage，不自动探测模型上下文容量。输出显式设置 max_tokens 并检测 finish_reason=length，截断结果不会被当作合法产物。批次与阶段分别保存成功输出，恢复时只继续未完成批次。复用目录创建新场景时另建任务和 Case 身份，复用完成的整理结果，保留原任务。
