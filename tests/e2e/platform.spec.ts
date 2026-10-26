@@ -4,8 +4,9 @@ test("review, approve and replay a semantic case from the UI", async ({
 }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "历史记录", exact: true }).first(),
+    page.getByRole("heading", { name: "用例流程", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await expect(
     page.getByRole("heading", { name: "删除本次运行创建的订单" }),
@@ -31,12 +32,17 @@ test("persists a draft and restores it after a page reload", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await page.getByRole("button", { name: "保存草稿", exact: true }).click();
   await expect(
     page.getByText("草稿已保存，可从历史记录重新打开。"),
   ).toBeVisible();
   await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "新建录制会话" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByText("未关联录制的模板与旧用例", { exact: true }).click();
   await page
     .getByRole("button", { name: "删除本次运行创建的订单 · 草稿" })
@@ -278,6 +284,7 @@ test("shows pending classification and saved request and response evidence in an
     route.fulfill({ json: { recording, assets: [] } }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "打开流程 接口证据展示" }).click();
   await page.getByRole("button", { name: "分析录制", exact: true }).click();
   await expect(
@@ -368,6 +375,7 @@ test("restores staged generation progress and opens its workflow draft", async (
     }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page
     .getByRole("button", { name: `打开流程 ${bundle.testCase.name}` })
     .click();
@@ -388,6 +396,7 @@ test("extracts test data and replays one approved workflow with two datasets row
   page,
 }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await page.getByRole("button", { name: "从流程提取测试数据" }).click();
   const editor = page.getByLabel("数据组（JSON 数组）");
@@ -467,6 +476,7 @@ test("shows generation stage, elapsed time, artifacts and recoverable errors", a
     }),
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "打开流程 生成界面测试" }).click();
   await expect(page.getByText("当前阶段：识别业务流程")).toBeVisible();
   await expect(page.getByText("总耗时：5.0 秒")).toBeVisible();
@@ -559,7 +569,9 @@ test("keeps recording, analysis, generation and review in one flow and groups hi
   await expect(nav.getByRole("button", { name: /分析|录制|环境/ })).toHaveCount(
     0,
   );
-  await page.getByRole("button", { name: "新建录制流程", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "新建录制会话" }),
+  ).toBeVisible();
   await page.getByLabel("用例名称", { exact: true }).fill(recording.caseName);
   await page.getByLabel("测试场景", { exact: true }).fill(recording.scenario);
   await page.getByRole("button", { name: "开始录制", exact: true }).click();
@@ -656,6 +668,7 @@ test("keeps workspace and recording history isolated and clears the previous flo
   );
   await page.goto("/");
   await page.getByLabel("当前工作区").selectOption(a.id);
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await expect(
     page.getByRole("button", { name: `打开流程 ${recB.caseName}` }),
   ).toHaveCount(0);

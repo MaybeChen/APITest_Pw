@@ -58,7 +58,7 @@ function remember(key: string, value: string) {
   }
 }
 function App() {
-  const [tab, setActiveTab] = useState("历史记录"),
+  const [tab, setActiveTab] = useState("浏览器录制"),
     [flowTab, setFlowTab] = useState("浏览器录制"),
     [generations, setGenerations] = useState<Generation[]>([]),
     [analyses, setAnalyses] = useState<Analysis[]>([]),
