@@ -238,3 +238,110 @@ it("preserves captured custom request headers while requiring a dynamic CSRF sou
     validate(f.testCase, plan, f.assets, f.context.environment),
   ).not.toContain("Static credentials forbidden");
 });
+
+it.each([undefined, null, ""])(
+  "requires an explicit path for JSON checks (%s)",
+  (path) => {
+    const f = intentFixture();
+    const call = {
+      ...f.intent.calls[0],
+      checks: [{ kind: "json", operator: "exists", path }],
+    };
+    expect(callIntentSchema.safeParse({ calls: [call] }).success).toBe(false);
+    call.checks[0].path = "$";
+    expect(callIntentSchema.safeParse({ calls: [call] }).success).toBe(true);
+  },
+);
+
+it("compiles a reviewed scenario dataflow even when historical business input differs", () => {
+  const f = intentFixture();
+  f.recording.requests[0].response = {
+    id: "recorded-id",
+    data: [{ placeholder_key: "existing-key" }],
+  };
+  f.recording.requests[1].body = { placeholder_key: "historical-other-key" };
+  f.recording.requests[1].method = "POST";
+  f.catalog[1].asset.method = "POST";
+  f.catalog[1].asset.operationType = "UPDATE";
+  f.catalog[1].asset.risk = "WRITE";
+  f.intent.calls[1].inputs.push({
+    location: "BODY",
+    path: "$.placeholder_key",
+    source: {
+      kind: "RESPONSE",
+      fromCall: "create",
+      path: "$.data[0].placeholder_key",
+    },
+  });
+  const result = compileCallIntent(f.intent, f.context);
+  expect(result.issues.filter((i) => i.kind === "BLOCKING")).toEqual([]);
+  expect(
+    result.issues.some(
+      (i) => i.kind === "REVIEW" && i.message.includes("构造新场景"),
+    ),
+  ).toBe(true);
+  expect(
+    result.plan.steps[1].bodyBindings?.["$.placeholder_key"],
+  ).toMatchObject({
+    source: "RESPONSE_VARIABLE",
+    fromStep: "create",
+    expectedType: "string",
+  });
+  expect(Object.values(result.plan.steps[0].extract)).toContain(
+    "$.data[0].placeholder_key",
+  );
+  expect(result.plan.steps[1].dependsOn).toContain("create");
+});
+
+it.each([123, "[REDACTED]", undefined])(
+  "blocks unproven scenario fields and incompatible target types (%s)",
+  (target) => {
+    const f = intentFixture();
+    f.recording.requests[1].body = { placeholder_key: target };
+    f.intent.calls[1].inputs.push({
+      location: "BODY",
+      path: "$.placeholder_key",
+      source: {
+        kind: "RESPONSE",
+        fromCall: "create",
+        path: "$.name",
+      },
+    });
+    const result = compileCallIntent(f.intent, f.context);
+    expect(
+      result.issues.some(
+        (i) => i.kind === "BLOCKING" && i.message.includes("采集流转证据"),
+      ),
+    ).toBe(true);
+    expect(
+      result.plan.steps[1].bodyBindings?.["$.placeholder_key"],
+    ).toBeUndefined();
+  },
+);
+
+it("keeps exact flow evidence mandatory for authentication headers and deletion targets", () => {
+  const f = intentFixture();
+  f.recording.requests[1].headers["x-nonce"] = "historical-nonce";
+  f.catalog[1].asset.headers["x-nonce"] = {
+    source: "STATIC",
+    value: "historical-nonce",
+  };
+  f.intent.calls[1].inputs.push({
+    location: "HEADER",
+    path: "x-nonce",
+    source: {
+      kind: "RESPONSE",
+      fromCall: "create",
+      path: "$.name",
+    },
+  });
+  f.recording.requests[2].url =
+    f.context.environment.baseURL + "/api/orders/other-resource";
+  const result = compileCallIntent(f.intent, f.context);
+  expect(
+    result.issues.filter(
+      (i) => i.kind === "BLOCKING" && i.message.includes("采集流转证据"),
+    ),
+  ).toHaveLength(2);
+  expect(result.plan.steps.some((s) => s.phase === "CLEANUP")).toBe(false);
+});

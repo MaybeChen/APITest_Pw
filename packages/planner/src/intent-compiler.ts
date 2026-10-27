@@ -510,16 +510,30 @@ export function compileCallIntent(
           (comparable &&
             (typeof value === "string" || typeof value === "number") &&
             recordedTarget === String(value));
+        const targetType = valueKind(recordedTarget);
+        const scenarioBinding =
+          !matches &&
+          input.location !== "HEADER" &&
+          assets.get(call.apiId)!.operationType !== "DELETE" &&
+          ["string", "number", "boolean"].includes(type) &&
+          (targetType === type ||
+            (comparable && targetType === "string" && type === "number"));
         if (
           recordedTarget === undefined ||
-          !matches ||
-          value === "[REDACTED]"
+          (!matches && !scenarioBinding) ||
+          value === "[REDACTED]" ||
+          recordedTarget === "[REDACTED]"
         ) {
           fail(
             `调用 ${call.id} 的 ${input.location} ${input.path} 与上游 ${source.fromCall} ${source.path} 没有可验证的采集流转证据`,
           );
           continue;
         }
+        if (scenarioBinding)
+          issues.push({
+            kind: "REVIEW",
+            message: `调用 ${call.id} 的 ${input.location} ${input.path} 使用上游 ${source.fromCall} ${source.path} 构造新场景；字段与类型有采集依据，但值不同于历史请求。请确认场景需要此流转，且执行时上游字段存在`,
+          });
         const variable = `var_${createHash("sha256")
           .update(JSON.stringify([source.fromCall, source.path]))
           .digest("hex")
