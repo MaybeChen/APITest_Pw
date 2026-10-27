@@ -8,6 +8,8 @@ it("captures bounded JSON once per response and explains missing, empty and over
     "/api/json?topic=all",
     "/api/empty",
     "/api/chunked",
+    "/api/chunked-post",
+    "/api/events",
     "/api/large",
     "/api/plain",
     "/api/binary",
@@ -17,7 +19,7 @@ it("captures bounded JSON once per response and explains missing, empty and over
   const server = createServer((req, res) => {
     req.resume();
     if (req.url === "/") {
-      const body = `<html><body><script>Promise.all(${JSON.stringify(paths)}.map(path=>fetch(path,path.includes('/api/json')?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'do-not-store-this-password',topic:'all'})}:{}).then(response=>response.arrayBuffer()))).then(()=>document.body.dataset.done='true')</script></body></html>`;
+      const body = `<html><body><script>Promise.all(${JSON.stringify(paths)}.map(path=>fetch(path,(path.includes('/api/json')||path.includes('/api/chunked-post'))?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'do-not-store-this-password',topic:'all'})}:{}).then(response=>response.arrayBuffer()))).then(()=>document.body.dataset.done='true')</script></body></html>`;
       res.writeHead(200, {
         "content-type": "text/html",
         "content-length": Buffer.byteLength(body),
@@ -30,7 +32,12 @@ it("captures bounded JSON once per response and explains missing, empty and over
       res.end();
       return;
     }
-    if (req.url === "/api/chunked") {
+    if (req.url === "/api/events") {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end("data: hello\n\n");
+      return;
+    }
+    if (req.url === "/api/chunked" || req.url === "/api/chunked-post") {
       res.writeHead(200, { "content-type": "application/json" });
       res.write('{"ok":');
       res.end("true}");
@@ -89,9 +96,12 @@ it("captures bounded JSON once per response and explains missing, empty and over
     });
     expect(byPath("/api/json").query.topic).toBe("all");
     expect(byPath("/api/empty").responseBodyCapture?.state).toBe("EMPTY");
-    expect(byPath("/api/chunked").responseBodyCapture?.reason).toContain(
-      "Content-Length",
-    );
+    for (const path of ["/api/chunked", "/api/chunked-post"]) {
+      expect(byPath(path).responseBodyCapture?.state).toBe("CAPTURED");
+      expect(byPath(path).response).toEqual({ ok: true });
+    }
+    expect(byPath("/api/chunked-post").method).toBe("POST");
+    expect(byPath("/api/events").responseBodyCapture?.reason).toContain("SSE");
     expect(byPath("/api/chunked").status).toBe(200);
     expect(byPath("/api/chunked").failure).toBeUndefined();
     expect(byPath("/api/large").responseBodyCapture?.state).toBe("OMITTED");

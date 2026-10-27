@@ -221,6 +221,7 @@ export class Recorder {
         if (!row) return;
         row.status = res.status();
         row.responseHeaders = redact(res.headers());
+        let reservedBytes = 0;
         try {
           const type = res.headers()["content-type"] ?? "";
           const headerLength = res.headers()["content-length"];
@@ -236,40 +237,56 @@ export class Recorder {
               reason: "此响应没有正文",
               bytes: 0,
             };
+          } else if (/text\/event-stream/i.test(type)) {
+            row.responseBodyCapture = {
+              state: "OMITTED",
+              reason: "SSE 流式响应不采集完整正文",
+            };
           } else if (!/json|text/i.test(type)) {
             row.responseBodyCapture = {
               state: "OMITTED",
               reason: "不采集此内容类型的响应正文",
-            };
-          } else if (!Number.isFinite(length) || length < 0) {
-            row.responseBodyCapture = {
-              state: "OMITTED",
-              reason:
-                "响应没有有效 Content-Length（可能为 chunked 或流式响应），为避免无界采集未读取正文",
             };
           } else if (length > 262144) {
             row.responseBodyCapture = {
               state: "OMITTED",
               reason: "响应超过单体 256 KiB 采集上限",
             };
-          } else if (this.capturedBytes + length > 2097152) {
+          } else if (
+            this.capturedBytes +
+              (Number.isFinite(length) && length >= 0 ? length : 262144) >
+            2097152
+          ) {
             row.responseBodyCapture = {
               state: "OMITTED",
               reason: "已达到单会话 2 MiB 响应采集预算",
             };
           } else {
-            this.capturedBytes += length;
-            const data = await Promise.race([
-              res.body(),
-              new Promise<never>((_, reject) =>
-                setTimeout(
-                  () => reject(new Error("Capture timeout")),
-                  3000,
-                ).unref(),
-              ),
-            ]);
-            // Content-Length can describe compressed bytes; enforce the limit on decoded bytes too.
-            this.capturedBytes += Math.max(0, data.length - length);
+            // Missing Content-Length is normal for finite chunked and HTTP/2 responses.
+            // Reserve the per-body limit while the read is pending; charge actual bytes afterwards.
+            reservedBytes =
+              Number.isFinite(length) && length >= 0 ? length : 262144;
+            this.capturedBytes += reservedBytes;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            let data: Buffer;
+            try {
+              data = await Promise.race([
+                res.body(),
+                new Promise<never>((_, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error("Capture timeout")),
+                    3000,
+                  );
+                  timer.unref();
+                }),
+              ]);
+            } finally {
+              clearTimeout(timer);
+            }
+            // Content-Length can describe compressed bytes; check decoded bytes too.
+            this.capturedBytes -= reservedBytes;
+            reservedBytes = 0;
+            this.capturedBytes += data.length;
             if (data.length > 262144)
               row.responseBodyCapture = {
                 state: "OMITTED",
@@ -309,6 +326,8 @@ export class Recorder {
             state: "FAILED",
             reason: "响应正文读取超时或不可用；请求状态与响应头仍保留",
           };
+        } finally {
+          this.capturedBytes -= reservedBytes;
         }
         row.endedAt = Date.now();
         row.duration = row.endedAt - row.startedAt;
