@@ -360,7 +360,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   app.get<{ Params: { id: string } }>("/api/generations/:id", async (req) => {
     const job = await store.get<Generation>("generation", req.params.id);
     if (!job) throw new Error("生成任务不存在");
-    return job;
+    return { ...job, active: activeGenerations.has(job.id) };
   });
   app.post<{ Params: { id: string } }>(
     "/api/generations/:id/resume",

@@ -1068,7 +1068,6 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
     pipelineVersion: 2,
     planCompilerVersion: 2,
     state: "WAITING_CONFIGURATION",
-    active: false,
     caseConfirmed: true,
     selectionConfirmed: true,
     authProfileRef: "demo-auth",
@@ -1086,9 +1085,11 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
   await page.route("**/api/recordings", (route) =>
     route.fulfill({ json: [recording] }),
   );
-  await page.route("**/api/generations*", (route) =>
-    route.fulfill({ json: [job] }),
-  );
+  let polls = 0;
+  await page.route("**/api/generations*", (route) => {
+    polls++;
+    return route.fulfill({ json: [job] });
+  });
   await page.route("**/api/generations/compiler-config-job", (route) =>
     route.fulfill({ json: job }),
   );
@@ -1098,10 +1099,16 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
     }),
   );
   let submission: any;
+  let attempts = 0;
   await page.route(
     "**/api/generations/compiler-config-job/regenerate-plan",
     async (route) => {
       submission = route.request().postDataJSON();
+      attempts++;
+      if (attempts === 1) {
+        await route.fulfill({ status: 400, json: { error: "所选协议未配置" } });
+        return;
+      }
       job.authProfileRef = submission.authProfileRef;
       job.state = "RUNNING";
       job.active = true;
@@ -1120,7 +1127,28 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
     page.getByRole("button", { name: "打开草稿", exact: true }),
   ).toHaveCount(0);
   await page.getByLabel("计划前置 UI 协议").selectOption("real-ui");
-  await page.getByRole("button", { name: "重新生成计划", exact: true }).click();
+  const regenerate = page.getByRole("button", {
+    name: "重新生成计划",
+    exact: true,
+  });
+  await expect(regenerate).toBeEnabled(); // No optional active field in historical response.
+  await regenerate.click();
+  await expect(page.getByRole("alert")).toContainText("所选协议未配置");
+  const afterFailure = polls;
+  job.active = true; // A terminal job must not stay disabled by a stale active flag.
+  await expect.poll(() => polls).toBeGreaterThanOrEqual(afterFailure + 2);
+  await expect(page.getByRole("alert")).toContainText("所选协议未配置");
+  await expect(regenerate).toBeEnabled();
+  const beforeUnknownRunning = polls;
+  job.state = "RUNNING";
+  delete job.active;
+  await expect.poll(() => polls).toBeGreaterThan(beforeUnknownRunning);
+  await expect(
+    page.getByText("运行状态尚未确认，重新生成时将由后端检查。"),
+  ).toBeVisible();
+  await expect(regenerate).toBeEnabled();
+  await regenerate.click();
+  await expect.poll(() => attempts).toBe(2);
   await expect.poll(() => submission?.authProfileRef).toBe("real-ui");
   expect(submission.revision).toBe(10);
   await expect(

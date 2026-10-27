@@ -46,6 +46,8 @@ export function GenerationProgress({
   const [jobs, setJobs] = useState<(Generation & { active?: boolean })[]>([]);
   const [selectedId, setSelectedId] = useState(generationId ?? "");
   const [error, setError] = useState("");
+  const [refreshError, setRefreshError] = useState("");
+  const [notice, setNotice] = useState("");
   const [resuming, setResuming] = useState<string>();
   const [profiles, setProfiles] = useState<AuthProfile[]>([]);
   const [authChoices, setAuthChoices] = useState<Record<string, string>>({});
@@ -86,10 +88,10 @@ export function GenerationProgress({
               )
               .sort((a, b) => b.createdAt - a.createdAt),
           );
-          setError("");
+          setRefreshError("");
         }
       } catch (error) {
-        if (!cancelled) setError(String(error));
+        if (!cancelled) setRefreshError(String(error));
       } finally {
         if (!cancelled) timer = setTimeout(() => void refresh(), 1500);
       }
@@ -101,6 +103,8 @@ export function GenerationProgress({
     };
   }, [workspaceId, recordingId, generationId]);
   const resume = async (job: Generation) => {
+    setError("");
+    setNotice("");
     setResuming(job.id);
     try {
       const response = await fetch(`/api/generations/${job.id}/resume`, {
@@ -115,6 +119,8 @@ export function GenerationProgress({
     }
   };
   const regenerate = async (job: Generation) => {
+    setError("");
+    setNotice("");
     setResuming(job.id);
     try {
       const response = await fetch(
@@ -131,15 +137,17 @@ export function GenerationProgress({
       if (!response.ok) throw new Error(await response.text());
       const fresh = await fetch(`/api/generations/${job.id}`);
       if (!fresh.ok) throw new Error(await fresh.text());
-      const next = (await fresh.json()) as Generation;
+      const next = (await fresh.json()) as Generation & { active?: boolean };
       setJobs((all) =>
-        all.map((item) =>
-          item.id === job.id
-            ? { ...next, active: next.state === "RUNNING" }
-            : item,
-        ),
+        all.map((item) => (item.id === job.id ? { ...next } : item)),
       );
-      setError("");
+      setNotice(
+        next.state === "WAITING_CONFIGURATION"
+          ? "配置检查未通过，请按下方提示补充后重新生成。"
+          : next.state === "NEEDS_REVIEW"
+            ? "计划已重新生成，请审核产物。"
+            : "重新生成请求已提交，进度见下方。",
+      );
     } catch (error) {
       setError(String(error));
     } finally {
@@ -154,9 +162,15 @@ export function GenerationProgress({
       </p>
       {error && (
         <p className="error" role="alert">
-          刷新或操作失败：{error}
+          操作失败：{error}
         </p>
       )}
+      {refreshError && (
+        <p className="error" role="alert">
+          刷新失败：{refreshError}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
       {!jobs.length && (
         <p className="empty">暂无生成任务。分析录制后即可开始生成。</p>
       )}
@@ -180,6 +194,13 @@ export function GenerationProgress({
         .filter((job) => job.id === (selectedId || jobs[0]?.id))
         .map((job) => {
           const interrupted = job.state === "RUNNING" && job.active === false;
+          const actionBusy =
+            (job.state === "RUNNING" && job.active === true) ||
+            resuming === job.id;
+          const busyReason =
+            resuming === job.id
+              ? "正在提交操作，请稍候"
+              : "当前任务仍在运行，完成后可重新生成";
           const current =
             job.stages.find((s) => s.state === "RUNNING") ??
             job.stages.find((s) => s.state === "FAILED");
@@ -232,6 +253,9 @@ export function GenerationProgress({
                 max={job.stages.length}
                 value={completed}
               />
+              {job.state === "RUNNING" && job.active === undefined && (
+                <p>运行状态尚未确认，重新生成时将由后端检查。</p>
+              )}
               {job.error && (
                 <p role="alert" className="error">
                   {job.error}
@@ -322,7 +346,7 @@ export function GenerationProgress({
                     计划前置 UI 协议
                     <select
                       value={authChoices[job.id] ?? job.authProfileRef ?? ""}
-                      disabled={job.active !== false || resuming === job.id}
+                      disabled={actionBusy}
                       onChange={(event) =>
                         setAuthChoices((all) => ({
                           ...all,
@@ -383,7 +407,13 @@ export function GenerationProgress({
                       job.pipelineVersion === 2 &&
                       job.caseConfirmed && (
                         <button
-                          disabled={job.active !== false || resuming === job.id}
+                          type="button"
+                          disabled={actionBusy}
+                          title={
+                            actionBusy
+                              ? busyReason
+                              : "保留已确认用例，重新生成调用计划及后续校验"
+                          }
                           onClick={() => void regenerate(job)}
                         >
                           重新生成计划

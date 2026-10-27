@@ -337,6 +337,11 @@ it("waits for real prerequisite configuration without calling the plan model and
     job = await wait(id, "NEEDS_REVIEW");
     expect(job.planCompilerVersion).toBe(2);
     expect(job.plan!.authProfileRef).toBe("real-ui");
+    await expect
+      .poll(
+        async () => (await app.inject(`/api/generations/${id}`)).json().active,
+      )
+      .toBe(false);
     expect(job.preflight!.blockers).toEqual([]);
     expect(job.plan!.steps[0].headers).not.toHaveProperty("x-page-token");
     expect(job.callIntent!.calls).toHaveLength(1);
