@@ -31,7 +31,12 @@ import {
   type Environment,
   type AuthProfile,
 } from "../../../packages/contracts/src/index.js";
-import { validate, validateDataset } from "../../../packages/core/src/index.js";
+import {
+  validate,
+  validateDataset,
+  allowedURL,
+  atPath,
+} from "../../../packages/core/src/index.js";
 import { Recorder, analyze } from "../../../packages/recorder/src/index.js";
 import { type AIProvider } from "../../../packages/planner/src/index.js";
 import {
@@ -101,6 +106,14 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   app.post("/api/auth-profiles", async (req) => {
     const data = authSchema.parse(req.body);
     if (data.environmentRef) await envFor(data.environmentRef);
+    for (const [name, source] of Object.entries(data.tokenSources)) {
+      if (source.source === "response" || source.source === "responseHeader") {
+        if (!source.url) throw new Error(`前置接口来源 ${name} 缺少 URL`);
+        if (data.environmentRef)
+          allowedURL(source.url, await envFor(data.environmentRef));
+        if (source.source === "response") atPath({}, source.storageKey);
+      }
+    }
     for (const [name, binding] of Object.entries(data.headers))
       if (
         binding.source === "AUTH_CONTEXT" &&

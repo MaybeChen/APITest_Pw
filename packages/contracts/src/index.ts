@@ -115,6 +115,26 @@ export const contextSnapshotSchema = z.object({
     }),
   ),
 });
+export const authSourceHintSchema = z.object({
+  header: id,
+  source: z.enum([
+    "localStorage",
+    "sessionStorage",
+    "cookie",
+    "response",
+    "responseHeader",
+  ]),
+  storageKey: id,
+  prefix: z.string(),
+  origin: z.string().url().optional(),
+  url: z.string().url().optional(),
+  method: z
+    .enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    .optional(),
+  requestIds: z.array(id).default([]),
+  evidence: z.literal("EXACT_VALUE_MATCH"),
+});
+export type AuthSourceHint = z.infer<typeof authSourceHintSchema>;
 export const recordingSchema = z.object({
   id,
   environmentRef: id.optional(),
@@ -137,6 +157,7 @@ export const recordingSchema = z.object({
     }),
   ),
   requests: z.array(network),
+  authHints: z.array(authSourceHintSchema).optional(),
   contextSnapshots: z.array(contextSnapshotSchema).optional(),
   contextCapture: z
     .object({
@@ -290,7 +311,24 @@ export const authSchema = z.object({
   tokenSources: z
     .record(
       z.string(),
-      z.object({ storageKey: id, prefix: z.string().default("") }),
+      z.object({
+        storageKey: id,
+        prefix: z.string().default(""),
+        source: z
+          .enum([
+            "localStorage",
+            "sessionStorage",
+            "cookie",
+            "response",
+            "responseHeader",
+          ])
+          .optional(),
+        origin: z.string().url().optional(),
+        url: z.string().url().optional(),
+        method: z
+          .enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+          .optional(),
+      }),
     )
     .default({}),
   reauthenticateReads: z.boolean().default(false),

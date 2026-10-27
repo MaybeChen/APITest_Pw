@@ -985,6 +985,28 @@ test("records, reviews and saves a reusable precondition UI profile from configu
     target: "http://127.0.0.1:3100/login",
     state: "RECORDING",
     actions: [{ type: "navigate", target: "http://127.0.0.1:3100/login" }],
+    authHints: [
+      {
+        header: "x-gde-csrf-token",
+        source: "response",
+        url: "http://127.0.0.1:3100/adc-system/web/rest/v1/uiconfig/info",
+        method: "GET",
+        storageKey: "$.data.csrfToken",
+        prefix: "",
+        requestIds: [],
+        evidence: "EXACT_VALUE_MATCH",
+      },
+      {
+        header: "x-page-token",
+        source: "responseHeader",
+        url: "http://127.0.0.1:3100/adc-system/web/rest/v1/uiconfig/info",
+        method: "GET",
+        storageKey: "x-page-token",
+        prefix: "",
+        requestIds: [],
+        evidence: "EXACT_VALUE_MATCH",
+      },
+    ],
   };
   let started = false;
   let saved: any;
@@ -1028,6 +1050,15 @@ test("records, reviews and saves a reusable precondition UI profile from configu
     .getByRole("button", { name: "停止前置 UI 录制", exact: true })
     .click();
   await expect(page.getByLabel("前置 UI 动作 JSON")).toHaveValue(/UI_INPUT_1/);
+  await expect(
+    page.getByRole("cell", { name: "前置接口响应", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "应用唯一识别的来源", exact: true })
+    .click();
+  await expect(page.getByLabel("前置 UI Token 来源 JSON")).toHaveValue(
+    /response/,
+  );
   await page.getByLabel("前置 UI 协议 ID").fill("recorded-login");
   await page.getByLabel("前置 UI 就绪元素").fill("#ready");
   await page
@@ -1040,6 +1071,19 @@ test("records, reviews and saves a reusable precondition UI profile from configu
   ).toBeVisible();
   expect(saved.recordingRef).toBe("ui-flow-test");
   expect(saved.readySelector).toBe("#ready");
+  expect(saved.headers["x-gde-csrf-token"]).toEqual({
+    source: "AUTH_CONTEXT",
+    name: "recorded_x_gde_csrf_token",
+  });
+  expect(saved.tokenSources.recorded_x_gde_csrf_token).toMatchObject({
+    source: "response",
+    storageKey: "$.data.csrfToken",
+    method: "GET",
+  });
+  expect(saved.tokenSources.recorded_x_page_token).toMatchObject({
+    source: "responseHeader",
+    storageKey: "x-page-token",
+  });
   expect(saved.actions[1]).toEqual({
     type: "fill",
     target: "#password",
@@ -1059,7 +1103,14 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
     target: "http://127.0.0.1:3100",
     startedAt: Date.now(),
     state: "STOPPED",
-    requests: [],
+    requests: [
+      {
+        id: "captured-header-request",
+        method: "GET",
+        url: "http://127.0.0.1:3100/api/orders",
+        headers: { "x-page-token": "[REDACTED]" },
+      },
+    ],
     operations: [],
   };
   const job: any = {
@@ -1100,12 +1151,17 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
   );
   let submission: any;
   let attempts = 0;
+  let releaseFirst!: () => void;
+  const firstPending = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
   await page.route(
     "**/api/generations/compiler-config-job/regenerate-plan",
     async (route) => {
       submission = route.request().postDataJSON();
       attempts++;
       if (attempts === 1) {
+        await firstPending;
         await route.fulfill({ status: 400, json: { error: "所选协议未配置" } });
         return;
       }
@@ -1126,6 +1182,15 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
   await expect(
     page.getByRole("button", { name: "打开草稿", exact: true }),
   ).toHaveCount(0);
+  await expect(
+    page.getByText("请求已处理，但尚未开始生成计划：前置认证配置未通过。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByText("查看 x-page-token 的录制证据（1 条请求）", { exact: true })
+    .click();
+  await expect(page.getByText(/请求 captured-header-request/)).toBeVisible();
   await page.getByLabel("计划前置 UI 协议").selectOption("real-ui");
   const regenerate = page.getByRole("button", {
     name: "重新生成计划",
@@ -1133,6 +1198,16 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
   });
   await expect(regenerate).toBeEnabled(); // No optional active field in historical response.
   await regenerate.click();
+  try {
+    await expect(
+      page.getByRole("button", { name: "正在提交…", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByText("正在提交请求并检查前置配置…", { exact: true }),
+    ).toBeVisible();
+  } finally {
+    releaseFirst();
+  }
   await expect(page.getByRole("alert")).toContainText("所选协议未配置");
   const afterFailure = polls;
   job.active = true; // A terminal job must not stay disabled by a stale active flag.

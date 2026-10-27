@@ -1,7 +1,9 @@
+import { AuthSourceHints, applyAuthHints } from "./AuthSourceHints";
 import { useEffect, useState } from "react";
 import type {
   Environment,
   AuthProfile,
+  AuthSourceHint,
 } from "../../../../packages/contracts/src/index";
 type Snapshot = {
   id: string;
@@ -9,6 +11,7 @@ type Snapshot = {
   target: string;
   state: "RECORDING" | "STOPPED";
   actions: AuthProfile["actions"];
+  authHints?: AuthSourceHint[];
 };
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(
@@ -27,14 +30,22 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
 export function UIFlowRecorder({
   environments,
   onSaved,
+  initialEnvironmentRef,
 }: {
   environments: Environment[];
+  initialEnvironmentRef?: string;
   onSaved: (profile: AuthProfile) => Promise<void>;
 }) {
   const [environmentRef, setEnvironmentRef] = useState(
-    environments[0]?.id ?? "",
+    environments.find((item) => item.id === initialEnvironmentRef)?.id ??
+      environments[0]?.id ??
+      "",
   );
-  const [target, setTarget] = useState(environments[0]?.baseURL ?? "");
+  const [target, setTarget] = useState(
+    environments.find((item) => item.id === initialEnvironmentRef)?.baseURL ??
+      environments[0]?.baseURL ??
+      "",
+  );
   const [recording, setRecording] = useState<Snapshot>();
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [profileId, setProfileId] = useState("");
@@ -217,6 +228,30 @@ export function UIFlowRecorder({
               onChange={(e) => setActions(e.target.value)}
             />
           </label>
+          <AuthSourceHints
+            hints={recording.authHints ?? []}
+            disabled={active || busy}
+            onApply={(hints) =>
+              void task(async () => {
+                const updated = applyAuthHints(
+                  {
+                    id: profileId || "draft",
+                    actions: [],
+                    readySelector: "body",
+                    headers: JSON.parse(headers),
+                    tokenSources: JSON.parse(tokens),
+                    reauthenticateReads: false,
+                  },
+                  hints,
+                );
+                setTokens(JSON.stringify(updated.tokenSources, null, 2));
+                setHeaders(JSON.stringify(updated.headers, null, 2));
+                setNotice(
+                  "已填入识别的来源与 Header 绑定，请审核并保存前置 UI 协议。",
+                );
+              })
+            }
+          />
           <label>
             前置 UI 协议 ID
             <input
@@ -237,7 +272,8 @@ export function UIFlowRecorder({
           </label>
           <p>
             Cookie 自动共享。仅在接口还需要额外 Token Header
-            时配置下面两项；tokenSources 从 localStorage 提取，Header 的
+            时配置下面两项；tokenSources 支持前置接口的 JSON / 响应
+            Header、Cookie、localStorage 和 sessionStorage，Header 的
             AUTH_CONTEXT.name 引用其逻辑名称。
           </p>
           <label>

@@ -1,3 +1,4 @@
+import { AuthHintDiscovery } from "./auth-hints.js";
 import {
   recordingSchema,
   contextSnapshotSchema,
@@ -28,6 +29,8 @@ export class Recorder {
   pending = new Set<Promise<void>>();
   capturedBytes = 0;
   private stopping = false;
+  private authScans = 0;
+  private authDiscovery?: AuthHintDiscovery;
   private snapshotBytes = 0;
   recording: Recording;
   constructor(
@@ -122,6 +125,23 @@ export class Recorder {
     await this.context.addInitScript({
       path: fileURLToPath(new URL("./browser-recorder.js", import.meta.url)),
     });
+    const discovery = new AuthHintDiscovery(
+      this.context,
+      (this.recording.authHints ??= []),
+    );
+    this.authDiscovery = discovery;
+    this.context.on("response", (response) => {
+      if (
+        this.stopping ||
+        this.pending.size >= 32 ||
+        !["fetch", "xhr"].includes(response.request().resourceType())
+      )
+        return;
+      const pending = discovery
+        .response(response)
+        .finally(() => this.pending.delete(pending));
+      this.pending.add(pending);
+    });
     const ids = new Map<Request, string>();
     this.context.on("request", (req) => {
       if (this.stopping) return;
@@ -130,6 +150,17 @@ export class Recorder {
       if (this.recording.requests.length >= 5000) return;
       const rid = randomUUID();
       ids.set(req, rid);
+      if (
+        this.authScans < 128 &&
+        this.pending.size < 8 &&
+        ["fetch", "xhr"].includes(req.resourceType())
+      ) {
+        this.authScans++;
+        const pending = discovery
+          .request(req, rid)
+          .finally(() => this.pending.delete(pending));
+        this.pending.add(pending);
+      }
       let body: unknown;
       try {
         body =
@@ -297,6 +328,7 @@ export class Recorder {
     await Promise.allSettled([...this.pending]);
     await this.browser?.close();
     this.recording.state = "STOPPED";
+    this.authDiscovery?.clear();
     this.recording.endedAt = Date.now();
     for (const request of this.recording.requests) {
       request.operationCandidates = this.recording.operations

@@ -154,3 +154,21 @@ it("blocks invented save/delete inputs and preserves compiler blockers through p
   ];
   expect(compileCallIntent(f.intent, f.context).issues).toEqual([]);
 });
+
+it("requires authentication headers only when they have actual request evidence", async () => {
+  const { interfaceFacts } =
+    await import("../../packages/planner/src/evidence");
+  const f = intentFixture();
+  f.assets[0].headers["x-gde-csrf-token"] = {
+    source: "AUTH_CONTEXT",
+    name: "invented-from-old-catalog",
+  };
+  const refreshed = interfaceFacts(f.recording, f.assets[0]);
+  expect(refreshed.asset.headers).not.toHaveProperty("x-gde-csrf-token");
+  expect(preflightHeaders([refreshed], {}, [])).toEqual([]);
+  f.recording.requests[0].headers["x-gde-csrf-token"] = "[REDACTED]";
+  const observed = interfaceFacts(f.recording, f.assets[0]);
+  expect(preflightHeaders([observed], {}, [])[0].message).toContain(
+    "x-gde-csrf-token",
+  );
+});

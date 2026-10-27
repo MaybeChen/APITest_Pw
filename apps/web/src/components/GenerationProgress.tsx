@@ -1,3 +1,4 @@
+import { AuthSourceHints, applyAuthHints } from "./AuthSourceHints";
 import type { AuthProfile } from "../../../../packages/contracts/src/index";
 import { PipelineReview, ScenarioFork } from "./PipelineReview";
 import { useEffect, useState } from "react";
@@ -34,6 +35,7 @@ function duration(start?: number, end?: number) {
 }
 export function GenerationProgress({
   onOpen,
+  onConfigure,
   workspaceId = "",
   recordingId,
   generationId,
@@ -42,12 +44,14 @@ export function GenerationProgress({
   recordingId?: string;
   generationId?: string;
   onOpen: (job: Generation) => void;
+  onConfigure?: (job: Generation) => void;
 }) {
   const [jobs, setJobs] = useState<(Generation & { active?: boolean })[]>([]);
   const [selectedId, setSelectedId] = useState(generationId ?? "");
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [notice, setNotice] = useState("");
+  const [actionJobId, setActionJobId] = useState<string>();
   const [resuming, setResuming] = useState<string>();
   const [profiles, setProfiles] = useState<AuthProfile[]>([]);
   const [authChoices, setAuthChoices] = useState<Record<string, string>>({});
@@ -118,7 +122,8 @@ export function GenerationProgress({
       setResuming(undefined);
     }
   };
-  const regenerate = async (job: Generation) => {
+  const regenerate = async (job: Generation, authProfileOverride?: string) => {
+    setActionJobId(job.id);
     setError("");
     setNotice("");
     setResuming(job.id);
@@ -130,7 +135,8 @@ export function GenerationProgress({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             revision: job.revision,
-            authProfileRef: authChoices[job.id] || job.authProfileRef,
+            authProfileRef:
+              authProfileOverride ?? authChoices[job.id] ?? job.authProfileRef,
           }),
         },
       );
@@ -197,6 +203,24 @@ export function GenerationProgress({
           const actionBusy =
             (job.state === "RUNNING" && job.active === true) ||
             resuming === job.id;
+          const selectedProfile = profiles.find(
+            (profile) =>
+              profile.id === (authChoices[job.id] ?? job.authProfileRef),
+          );
+          const missingHeaderNames = [
+            ...new Set(
+              (job.preflight?.blockers ?? []).flatMap(
+                (message) =>
+                  message.match(/^认证 Header ([A-Za-z0-9_-]+)/)?.[1] ?? [],
+              ),
+            ),
+          ];
+          const relevantHints = (job.input.recording.authHints ?? []).filter(
+            (hint) =>
+              missingHeaderNames.some(
+                (name) => name.toLowerCase() === hint.header.toLowerCase(),
+              ),
+          );
           const busyReason =
             resuming === job.id
               ? "正在提交操作，请稍候"
@@ -337,11 +361,94 @@ export function GenerationProgress({
                       {job.preflight.blockers.length ? "待补充" : "通过"}
                     </p>
                   )}
-                  {job.preflight?.blockers.map((message) => (
-                    <p className="error" key={message}>
-                      {message}
-                    </p>
-                  ))}
+                  {job.state === "WAITING_CONFIGURATION" && (
+                    <div className="generation-blocked" aria-live="polite">
+                      <strong>
+                        请求已处理，但尚未开始生成计划：前置认证配置未通过。
+                      </strong>
+                      <p>
+                        这里还没有调用大模型。请补充当前协议的认证来源，或选择实际录制的前置
+                        UI 协议后再生成。
+                      </p>
+                      {job.preflight?.blockers.map((message) => (
+                        <p key={message}>{message}</p>
+                      ))}
+                      {missingHeaderNames.map((header) => {
+                        const requests = job.input.recording.requests.filter(
+                          (request) =>
+                            Object.keys(request.headers).some(
+                              (name) =>
+                                name.toLowerCase() === header.toLowerCase(),
+                            ),
+                        );
+                        return (
+                          <details key={header}>
+                            <summary>
+                              查看 {header} 的录制证据（{requests.length}{" "}
+                              条请求）
+                            </summary>
+                            {requests.slice(0, 5).map((request) => (
+                              <p key={request.id}>
+                                {request.method} {request.url} · 请求{" "}
+                                {request.id}（已隐藏 Header 值）
+                              </p>
+                            ))}
+                            {!requests.length && (
+                              <p>
+                                当前录制没有该 Header
+                                的请求证据，请重新分析或生成，不能按旧目录猜测来源。
+                              </p>
+                            )}
+                          </details>
+                        );
+                      })}
+                      {onConfigure && (
+                        <button type="button" onClick={() => onConfigure(job)}>
+                          前往配置录制前置 UI
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {job.state === "WAITING_CONFIGURATION" && (
+                    <AuthSourceHints
+                      hints={relevantHints}
+                      disabled={actionBusy || !selectedProfile}
+                      onApply={(hints) =>
+                        void (async () => {
+                          if (!selectedProfile) return;
+                          setActionJobId(job.id);
+                          setResuming(job.id);
+                          setError("");
+                          try {
+                            const updated = applyAuthHints(
+                              selectedProfile,
+                              hints,
+                            );
+                            const response = await fetch("/api/auth-profiles", {
+                              method: "POST",
+                              headers: { "content-type": "application/json" },
+                              body: JSON.stringify(updated),
+                            });
+                            if (!response.ok)
+                              throw new Error(await response.text());
+                            const saved =
+                              (await response.json()) as AuthProfile;
+                            setProfiles((all) =>
+                              all.map((profile) =>
+                                profile.id === saved.id ? saved : profile,
+                              ),
+                            );
+                            await regenerate(job, saved.id);
+                          } catch (error) {
+                            setError(String(error));
+                          } finally {
+                            setResuming(undefined);
+                          }
+                        })()
+                      }
+                    />
+                  )}
+
                   <label>
                     计划前置 UI 协议
                     <select
@@ -416,9 +523,29 @@ export function GenerationProgress({
                           }
                           onClick={() => void regenerate(job)}
                         >
-                          重新生成计划
+                          {resuming === job.id ? "正在提交…" : "重新生成计划"}
                         </button>
                       )}
+                    {stage.id === "PLAN_DESIGN" && actionJobId === job.id && (
+                      <p
+                        aria-live="polite"
+                        className={
+                          job.state === "WAITING_CONFIGURATION" || error
+                            ? "error"
+                            : ""
+                        }
+                      >
+                        {resuming === job.id
+                          ? "正在提交请求并检查前置配置…"
+                          : error
+                            ? `操作失败：${error}`
+                            : job.state === "WAITING_CONFIGURATION"
+                              ? "本次未开始生成：认证配置仍待补充，请查看上方认证提示。"
+                              : job.state === "RUNNING"
+                                ? `请求已受理，当前阶段：${current ? labels[current.id] : "正在检查或启动"}`
+                                : "本次请求已完成，请查看阶段产物和校验结果。"}
+                      </p>
+                    )}
                     {stage.error && <pre className="error">{stage.error}</pre>}
                     {stage.output !== undefined ? (
                       <details>

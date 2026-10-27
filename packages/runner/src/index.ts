@@ -1,3 +1,4 @@
+import { observeAuthResponses } from "./auth-response.js";
 import { schedule } from "./scheduler.js";
 import { existsSync } from "node:fs";
 import {
@@ -35,61 +36,111 @@ export async function uiAuthenticate(
   page: Page,
   profile: AuthProfile,
   env: Environment,
+  previousAuth?: Record<string, string>,
 ) {
   if (profile.environmentRef && profile.environmentRef !== env.id)
     throw new Error("UI flow environment mismatch");
-  for (const action of profile.actions) {
-    switch (action.type) {
-      case "navigate":
-        await page.goto(
-          allowedURL(new URL(action.target, env.baseURL).href, env),
-        );
-        break;
-      case "fill": {
-        const value = action.secretRef
-          ? process.env[action.secretRef]
-          : action.value;
-        if (value === undefined)
-          throw new Error(`Missing UI input reference ${action.secretRef}`);
-        await page.locator(action.target).fill(value);
-        break;
+  const responses = observeAuthResponses(context, profile, env);
+  try {
+    for (const action of profile.actions) {
+      switch (action.type) {
+        case "navigate":
+          await page.goto(
+            allowedURL(new URL(action.target, env.baseURL).href, env),
+          );
+          break;
+        case "fill": {
+          const value = action.secretRef
+            ? process.env[action.secretRef]
+            : action.value;
+          if (value === undefined)
+            throw new Error(`Missing UI input reference ${action.secretRef}`);
+          await page.locator(action.target).fill(value);
+          break;
+        }
+        case "selectOption": {
+          const value = action.secretRef
+            ? process.env[action.secretRef]
+            : action.value;
+          if (value === undefined)
+            throw new Error(`Missing UI input reference ${action.secretRef}`);
+          await page.locator(action.target).selectOption(value);
+          break;
+        }
+        case "press":
+          if (!action.value) throw new Error("Missing UI key");
+          await page.locator(action.target).press(action.value);
+          break;
+        case "click":
+          await page.locator(action.target).click();
+          break;
+        case "waitForURL":
+          await page.waitForURL(action.target);
+          break;
+        case "waitForSelector":
+        case "assertVisible":
+          await page.locator(action.target).waitFor({ state: "visible" });
+          break;
       }
-      case "selectOption": {
-        const value = action.secretRef
-          ? process.env[action.secretRef]
-          : action.value;
-        if (value === undefined)
-          throw new Error(`Missing UI input reference ${action.secretRef}`);
-        await page.locator(action.target).selectOption(value);
-        break;
-      }
-      case "press":
-        if (!action.value) throw new Error("Missing UI key");
-        await page.locator(action.target).press(action.value);
-        break;
-      case "click":
-        await page.locator(action.target).click();
-        break;
-      case "waitForURL":
-        await page.waitForURL(action.target);
-        break;
-      case "waitForSelector":
-      case "assertVisible":
-        await page.locator(action.target).waitFor({ state: "visible" });
-        break;
     }
+    await page.locator(profile.readySelector).waitFor({ state: "visible" });
+    const auth: Record<string, string> = {};
+    for (const [name, source] of Object.entries(profile.tokenSources)) {
+      const kind = source.source ?? "localStorage";
+      let value: string | null | undefined;
+      if (kind === "response" || kind === "responseHeader") {
+        const previous = previousAuth?.[name];
+        const prefix = source.prefix ?? "";
+        value = await responses.read(
+          name,
+          previous?.startsWith(prefix)
+            ? previous.slice(prefix.length)
+            : undefined,
+        );
+      } else if (kind === "cookie") {
+        const cookies = await context.cookies(
+          allowedURL(source.url ?? env.baseURL, env),
+        );
+        const cookie = cookies.find(
+          (cookie) => cookie.name === source.storageKey,
+        );
+        value = cookie?.value;
+        if (value) {
+          try {
+            value = decodeURIComponent(value);
+          } catch {
+            /* Keep raw cookie when it is not URI encoded. */
+          }
+        }
+      } else {
+        if (source.origin) allowedURL(source.origin, env);
+        const frame = source.origin
+          ? page.frames().find((frame) => {
+              try {
+                return (
+                  new URL(frame.url()).origin === new URL(source.origin!).origin
+                );
+              } catch {
+                return false;
+              }
+            })
+          : page.mainFrame();
+        if (!frame) throw new Error(`Missing auth storage origin for ${name}`);
+        value = await frame.evaluate(
+          ({ key, kind }) =>
+            (kind === "sessionStorage" ? sessionStorage : localStorage).getItem(
+              key,
+            ),
+          { key: source.storageKey, kind },
+        );
+      }
+      if (!value) throw new Error(`Missing ${kind} auth source ${name}`);
+      auth[name] = (source.prefix ?? "") + value;
+    }
+    return auth;
+  } finally {
+    responses.close();
   }
-  await page.locator(profile.readySelector).waitFor({ state: "visible" });
-  const auth: Record<string, string> = {};
-  for (const [name, source] of Object.entries(profile.tokenSources)) {
-    const value = await page.evaluate(
-      (key) => localStorage.getItem(key),
-      source.storageKey,
-    );
-    if (!value) throw new Error(`Missing localStorage auth source ${name}`);
-    auth[name] = (source.prefix ?? "") + value;
-  }
-  return auth;
 }
 export class FixtureManager {
   resources: Report["resources"] = [];
@@ -202,6 +253,7 @@ export async function run(
         page,
         { ...authProfile, actions: p.uiActions },
         env,
+        auth,
       );
     let stopped = false;
     const execute = async (step: Plan["steps"][number]) => {

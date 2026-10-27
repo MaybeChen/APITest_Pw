@@ -928,6 +928,10 @@ function App() {
         {tab === "生成草稿" && recording && (
           <>
             <GenerationProgress
+              onConfigure={(job) => {
+                setEnvironmentRef(job.input.environment.id);
+                setTab("配置");
+              }}
               key={`${workspaceId}:${recording?.id}:${generationId}`}
               recordingId={recording?.id}
               generationId={generationId}
@@ -1381,6 +1385,7 @@ function App() {
               ))}
             </section>
             <UIFlowRecorder
+              initialEnvironmentRef={environmentRef}
               environments={environments}
               onSaved={async (profile) => {
                 await refresh();

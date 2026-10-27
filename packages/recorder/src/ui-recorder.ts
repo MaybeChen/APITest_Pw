@@ -1,3 +1,5 @@
+import { AuthHintDiscovery } from "./auth-hints.js";
+import type { AuthSourceHint } from "../../contracts/src/index.js";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -11,6 +13,10 @@ export class UIRecorder {
   browser?: Browser;
   context?: BrowserContext;
   actions: z.infer<typeof action>[] = [];
+  authHints: AuthSourceHint[] = [];
+  private pending = new Set<Promise<void>>();
+  private authScans = 0;
+  private discovery?: AuthHintDiscovery;
   state: "RECORDING" | "STOPPED" = "RECORDING";
   constructor(
     readonly environment: Environment,
@@ -23,6 +29,7 @@ export class UIRecorder {
       target: this.target,
       state: this.state,
       actions: structuredClone(this.actions),
+      authHints: structuredClone(this.authHints),
     };
   }
   async start(headless = false) {
@@ -45,6 +52,34 @@ export class UIRecorder {
       } catch {
         await route.abort("blockedbyclient");
       }
+    });
+    const discovery = new AuthHintDiscovery(this.context, this.authHints);
+    this.discovery = discovery;
+    this.context.on("response", (response) => {
+      if (
+        this.state !== "RECORDING" ||
+        this.pending.size >= 32 ||
+        !["fetch", "xhr"].includes(response.request().resourceType())
+      )
+        return;
+      const pending = discovery
+        .response(response)
+        .finally(() => this.pending.delete(pending));
+      this.pending.add(pending);
+    });
+    this.context.on("request", (request) => {
+      if (
+        this.state !== "RECORDING" ||
+        this.authScans >= 128 ||
+        this.pending.size >= 8 ||
+        !["fetch", "xhr"].includes(request.resourceType())
+      )
+        return;
+      this.authScans++;
+      const pending = discovery
+        .request(request)
+        .finally(() => this.pending.delete(pending));
+      this.pending.add(pending);
     });
     let inputIndex = 0;
     await this.context.exposeBinding("__uiRecord", (source, event: unknown) => {
@@ -108,6 +143,8 @@ export class UIRecorder {
   async stop() {
     this.state = "STOPPED";
     await this.browser?.close();
+    await Promise.allSettled(this.pending);
+    this.discovery?.clear();
     return this.snapshot();
   }
 }

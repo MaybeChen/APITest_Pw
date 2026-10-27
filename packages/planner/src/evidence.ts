@@ -50,9 +50,16 @@ export function interfaceFacts(
     asset.sources.includes(r.id),
   );
   asset = structuredClone(asset);
-  // Replace historic name-based guesses with the observed header value.
-  for (const [name, value] of Object.entries(requests[0]?.headers ?? {}))
-    asset.headers[name] = observedHeaderBinding(name, value);
+  // Header facts come only from captured requests, never inherited asset guesses.
+  asset.headers = {};
+  for (const request of requests)
+    for (const [name, value] of Object.entries(request.headers))
+      if (
+        !Object.keys(asset.headers).some(
+          (key) => key.toLowerCase() === name.toLowerCase(),
+        )
+      )
+        asset.headers[name] = observedHeaderBinding(name, value);
   const variants = new Map<string, (typeof requests)[number]>();
   for (const r of requests) {
     const shape = JSON.stringify({

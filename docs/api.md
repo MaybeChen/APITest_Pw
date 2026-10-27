@@ -301,7 +301,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 
 录制支持主页面 navigate、click、fill、selectOption、press Enter 和导航后 waitForURL；暂不支持 iframe、新窗口和复杂拖拽。填写及下拉动作只保存 `secretRef: UI_INPUT_1` 等服务端环境变量名，不采集具体值；回放前应配置对应变量，或在审核时调整引用。选择器优先使用唯一 id、data-testid、name、aria-label，最后回退 DOM 位置选择器，需人工审核。导航等待不保存跳转 URL 查询参数和片段。
 
-执行时先回放 AuthProfile.actions，等待 readySelector，再用同一 BrowserContext.request 执行接口调用，共享 Cookie。localStorage 的 Token 仍需配置 tokenSources（逻辑变量名到 storageKey/prefix），并通过 headers 的 AUTH_CONTEXT 绑定；不保存录制时的 Cookie 或 Token 值。额外 Plan.uiActions 执行后会重新提取认证变量。
+执行时先回放 AuthProfile.actions，等待 readySelector，再用同一 BrowserContext.request 执行接口调用，共享 Cookie。localStorage 的 Token 仍需配置 tokenSources（逻辑变量名到来源类型、字段路径/存储键及 prefix），并通过 headers 的 AUTH_CONTEXT 绑定；不保存录制时的 Cookie 或 Token 值。额外 Plan.uiActions 执行后会重新提取认证变量。
 
 ### 候选测试数据审核
 
@@ -318,3 +318,30 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 编译输出的 `plan.compilation:{version:2,blockers}` 被 `/api/validate`、`/api/approve` 和运行器共同检查；有编译阻塞的计划不能直接批准执行。新编译流程不调用模型局部修复完整 Plan。前置检查通过只表示配置静态完整，不表示已验证登录或回放。
 
 JSON 数组断言新增 `operator:contains|notContains`：path 指向实际存在的数组字段，value 为要匹配的原始值或非空字段对象（对象为递归子集匹配，类型严格相同）。不支持 JSONPath 通配符或过滤表达式。非数组响应时两种断言均失败。条件兜底清理的 `onlyIfOwned:true` 只能用于要求资源所有权的 CLEANUP 节点。
+
+### 认证来源识别与前置接口响应
+
+业务录制和前置 UI 录制增加 `authHints`：只保存经过真实 Header 值匹配的来源声明（header、source、storageKey、prefix、可选 origin/url/method、requestIds、evidence=EXACT_VALUE_MATCH），不保存 Header/Token 的实际值。来源支持 localStorage、sessionStorage、cookie、response（JSON 字段）、responseHeader（HTTP 响应头）。匹配多个来源时由用户选择，无法匹配时保持未知；不按 Header 名猜测存储键或响应路径。自动识别有次数、容量和深度预算，不解析脚本计算/加密或 JSONPath 过滤表达式。
+
+配置页停止前置 UI 录制后可“应用唯一识别的来源”，自动填写 tokenSources 与 Header 的 AUTH_CONTEXT 绑定，再审核保存。生成页配置拦截会显示原始录制请求证据、前往配置入口和明确的“尚未开始生成”状态，操作按钮附近保留本次反馈。录制目录中的 Header 只从当前请求证据重建，不继承没有证据的历史猜测。
+
+前置接口响应示例（域名和字段路径仅为示例，实际以录制识别结果为准）：
+
+```json
+{
+  "tokenSources": {
+    "csrf": {
+      "source": "response",
+      "url": "https://example.test/adc-system/web/rest/v1/uiconfig/info",
+      "method": "GET",
+      "storageKey": "$.data.csrfToken",
+      "prefix": ""
+    }
+  },
+  "headers": {
+    "x-gde-csrf-token": { "source": "AUTH_CONTEXT", "name": "csrf" }
+  }
+}
+```
+
+运行器在前置 UI 动作开始前监听该 URL/方法的实际响应，待页面就绪并提取字段后再执行业务接口；不会为提取认证值额外重放引导接口。每次新运行读取本次响应，不复用录制 Token。responseHeader 类型的 storageKey 是响应 Header 名；cookie 类型按 url 对应 Cookie 范围读取并解码；localStorage/sessionStorage 可用 origin 指定已存在框架的存储来源。省略 source 时兼容原 localStorage 行为。接口响应来源必须配置 URL，受环境允许地址校验；未观察到响应或字段不存在会明确报错，不会凭空生成 Token。
