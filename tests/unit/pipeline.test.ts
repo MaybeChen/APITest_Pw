@@ -442,3 +442,34 @@ it("passes configured authentication context names and bindings without credenti
     contract,
   );
 });
+
+it("normalizes absent model assertion data references without weakening plan validation", async () => {
+  const { normalizeTaskOutput, taskSchemas } =
+    await import("../../packages/planner/src/pipeline-contracts");
+  const raw = structuredClone(demoArtifacts().plan);
+  const assertion = raw.steps[0].assertions[0];
+  assertion.dataRef = "   ";
+  const normalized = taskSchemas.PLAN_DESIGN.parse(
+    normalizeTaskOutput("PLAN_DESIGN", raw),
+  );
+  expect(normalized.steps[0].assertions[0]).not.toHaveProperty("dataRef");
+  expect(assertion.dataRef).toBe("   ");
+  assertion.dataRef = "expected_status";
+  expect(
+    taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw))
+      .steps[0].assertions[0].dataRef,
+  ).toBe("expected_status");
+  assertion.dataRef = "";
+  expect(() => planSchema.parse(raw)).toThrow();
+  const repair = taskSchemas.PLAN_REPAIR.parse(
+    normalizeTaskOutput("PLAN_REPAIR", {
+      replacements: [raw.steps[0]],
+      reason: "修复",
+    }),
+  );
+  expect(repair.replacements[0].assertions[0]).not.toHaveProperty("dataRef");
+  (assertion as any).dataRef = 123;
+  expect(() =>
+    taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
+  ).toThrow();
+});

@@ -1,6 +1,7 @@
 import {
   taskMessages,
   taskSchemas,
+  normalizeTaskOutput,
   estimateTokens,
   type PipelineTask,
 } from "./pipeline-contracts.js";
@@ -370,7 +371,9 @@ export class ModelAIProvider implements AIProvider {
       this.planningLimits.maxOutputTokens,
     );
     const fence = content.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    return taskSchemas[task].parse(JSON.parse(fence ? fence[1] : content));
+    return taskSchemas[task].parse(
+      normalizeTaskOutput(task, JSON.parse(fence ? fence[1] : content)),
+    );
   }
   async close() {
     await this.config.close?.();

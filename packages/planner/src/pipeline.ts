@@ -13,7 +13,11 @@ import {
 import type { AIProvider, PlannerInput } from "./index.js";
 import { createGeneration, type Generation } from "./workflow.js";
 import { ModelConnectionError } from "./connection.js";
-import { taskSchemas, type PipelineTask } from "./pipeline-contracts.js";
+import {
+  taskSchemas,
+  normalizeTaskOutput,
+  type PipelineTask,
+} from "./pipeline-contracts.js";
 import {
   batchItems,
   compact,
@@ -267,11 +271,14 @@ export async function executePipeline(
       await persist();
       try {
         const output = taskSchemas[task].parse(
-          await provider.runTask!(task, redact(request), {
-            generationId: job.id,
-            attempt: checkpoint.attempts,
-            stage: task,
-          }),
+          normalizeTaskOutput(
+            task,
+            await provider.runTask!(task, redact(request), {
+              generationId: job.id,
+              attempt: checkpoint.attempts,
+              stage: task,
+            }),
+          ),
         ) as T;
         check?.(output);
         if (checkpoint !== stageFor(task)) {
