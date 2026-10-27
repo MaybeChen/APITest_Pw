@@ -1,3 +1,4 @@
+import { UIRecorder } from "../../../packages/recorder/src/ui-recorder.js";
 import {
   createPipeline,
   forkPipeline,
@@ -5,6 +6,7 @@ import {
   confirmInterfaces,
   confirmCase,
   resetScenario,
+  regeneratePlan,
 } from "../../../packages/planner/src/pipeline.js";
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
@@ -59,6 +61,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   await app.register(swaggerUI, { routePrefix: "/docs" });
   const sessions = new Map<string, Recorder>();
+  const uiSessions = new Map<string, UIRecorder>();
   let busy = false;
   app.setErrorHandler((err, _req, reply) => {
     reply
@@ -97,6 +100,15 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.post("/api/auth-profiles", async (req) => {
     const data = authSchema.parse(req.body);
+    if (data.environmentRef) await envFor(data.environmentRef);
+    for (const [name, binding] of Object.entries(data.headers))
+      if (
+        binding.source === "AUTH_CONTEXT" &&
+        !Object.hasOwn(data.tokenSources, binding.name)
+      )
+        throw new Error(
+          `Header ${name} 引用了未配置的认证变量 ${binding.name}`,
+        );
     for (const a of data.actions)
       if (
         a.type === "fill" &&
@@ -119,6 +131,50 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     );
     return data;
   });
+  app.get("/api/ui-recordings", async () => [
+    ...Array.from(uiSessions.values(), (rec) => rec.snapshot()),
+    ...(await store.latest("ui-recording")),
+  ]);
+  app.post("/api/ui-recordings", async (req, reply) => {
+    if (uiSessions.size)
+      return reply.code(409).send({ error: "请先停止当前前置 UI 录制" });
+    const input = z
+      .object({ target: z.string().url(), environmentRef: z.string().min(1) })
+      .parse(req.body);
+    const rec = new UIRecorder(
+      await envFor(input.environmentRef),
+      input.target,
+    );
+    uiSessions.set(rec.id, rec);
+    try {
+      await rec.start(process.env.RECORDER_HEADLESS === "true");
+    } catch (error) {
+      await rec.stop();
+      uiSessions.delete(rec.id);
+      throw error;
+    }
+    return rec.snapshot();
+  });
+  app.get<{ Params: { id: string } }>(
+    "/api/ui-recordings/:id",
+    async (req, reply) => {
+      const rec =
+        uiSessions.get(req.params.id)?.snapshot() ??
+        (await store.get("ui-recording", req.params.id));
+      return rec ?? reply.code(404).send({ error: "UI 录制不存在" });
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/ui-recordings/:id/stop",
+    async (req, reply) => {
+      const rec = uiSessions.get(req.params.id);
+      if (!rec) return reply.code(404).send({ error: "活动 UI 录制不存在" });
+      const snapshot = await rec.stop();
+      uiSessions.delete(rec.id);
+      await store.put("ui-recording", rec.id, 1, snapshot);
+      return snapshot;
+    },
+  );
   app.get("/api/ai-provider", async () => ({
     provider: aiProvider.name,
     model: aiProvider.version,
@@ -335,6 +391,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     "case",
     "scenario",
     "fork-scenario",
+    "regenerate-plan",
   ] as const) {
     app.post<{ Params: { id: string } }>(
       `/api/generations/:id/${action}`,
@@ -369,7 +426,28 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
             );
             return { id: next.id };
           }
-          if (action === "interfaces") {
+          if (action === "regenerate-plan") {
+            if (
+              job.provider.name !== aiProvider.name ||
+              job.provider.version !== aiProvider.version
+            )
+              throw new Error("模型名称或版本已改变，请创建新的生成任务");
+            const profile = await store.get<AuthProfile>(
+              "auth",
+              job.authProfileRef ?? "",
+            );
+            if (!profile) throw new Error("所选 UI 认证协议尚未配置");
+            if (
+              profile.environmentRef &&
+              profile.environmentRef !== job.input.environment.id
+            )
+              throw new Error("UI 认证协议所属环境与当前计划不一致");
+            regeneratePlan(job);
+            job.authContract = {
+              availableContexts: Object.keys(profile.tokenSources),
+              headers: profile.headers,
+            };
+          } else if (action === "interfaces") {
             const value = z
               .object({
                 selectedApiIds: z.array(z.string()).min(1),
@@ -397,6 +475,11 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
               value.authProfileRef,
             );
             if (!profile) throw new Error("所选 UI 认证协议尚未配置");
+            if (
+              profile.environmentRef &&
+              profile.environmentRef !== job.input.environment.id
+            )
+              throw new Error("UI 认证协议所属环境与当前计划不一致");
             confirmCase(job, value.testCase);
             job.authProfileRef = value.authProfileRef;
             job.authContract = {
@@ -586,6 +669,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.addHook("onClose", async () => {
     for (const rec of sessions.values()) await rec.stop();
+    for (const rec of uiSessions.values()) await rec.stop();
     await Promise.allSettled(activeGenerations.values());
     await aiProvider.close?.();
     store.client.close();

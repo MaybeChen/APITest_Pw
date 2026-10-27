@@ -428,13 +428,17 @@ export function analyze(recording: Recording, filter: Filter = {}) {
     const headers: Asset["headers"] = {};
     for (const h of Object.keys(req.headers)) {
       headers[h] =
-        /cookie|host|content-length|user-agent|accept|sec-|connection/i.test(h)
+        /^(cookie|host|content-length|user-agent|accept(?:-.*)?|sec-.*|connection)$/i.test(
+          h,
+        )
           ? { source: "CLIENT_MANAGED" }
-          : /authorization|csrf|token/i.test(h)
-            ? { source: "AUTH_CONTEXT", name: h }
-            : /request-id|nonce|timestamp/i.test(h)
-              ? { source: "RUNTIME_GENERATED", kind: "uuid" }
-              : { source: "MANUAL_REVIEW" };
+          : /authorization|csrf|token|secret|password|signature|api.?key/i.test(
+                h,
+              ) ||
+              redact(req.headers[h], h) !== req.headers[h] ||
+              /\[REDACTED\]/.test(req.headers[h])
+            ? { source: "MANUAL_REVIEW" }
+            : { source: "STATIC", value: req.headers[h] };
     }
     asset = {
       apiId,

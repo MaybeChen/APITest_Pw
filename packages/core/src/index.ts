@@ -38,6 +38,9 @@ export function redact(value: unknown, key = ""): any {
       Object.entries(value).map(([k, v]) => [k, redact(v, k)]),
     );
   if (typeof value === "string") {
+    // Epoch timestamps are metadata, not payment-card numbers.
+    if (/(?:^|[-_])timestamp$/i.test(key) && /^\d{10}(?:\d{3})?$/.test(value))
+      return value;
     if (/^(Bearer |Basic )/i.test(value)) return "[REDACTED]";
     return value
       .replace(

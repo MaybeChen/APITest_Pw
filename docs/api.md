@@ -286,3 +286,19 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 6. `POST /api/generations/:id/fork-scenario`：`{revision,scenario}`。已完成接口整理的非活动任务可复用目录创建另一个场景任务，返回新 `{id}`；原任务不修改，`catalogSourceGenerationId` 记录复用来源，新 Case 身份独立。
 
 模型调用次数通常为“接口整理批次数 + 场景筛选批次数 + 语义用例 1 次 + 调用计划 1 次”，另可能有 1 次局部修复；每个模型批次/阶段最多尝试 2 次。确认等待期间与回放期间不调用模型。目录/样例压缩仅影响模型输入，不能当作执行数据；超过阶段预算会明确报错，请缩小场景或所选接口范围。
+
+- `POST /api/generations/:id/regenerate-plan`：`{revision}`。仅新版且接口、用例均已确认的任务可用；活动任务及过期修订返回 409。保留整理、筛选与用例结果，清空计划、校验、修复和最终校验检查点及候选数据集后重跑，读取当前认证协议配置。不会修改已批准保存的用例、计划或数据集；新草稿仍需审核。
+
+### 前置 UI 流程录制
+
+在配置页选择环境和起始地址，点击“开始前置 UI 录制”，在浏览器完成登录/页面准备，停止后审核动作 JSON、协议 ID 和就绪元素，再保存为 AuthProfile。生成计划时选择该协议。历史录制可重新打开编辑并另存协议。
+
+- `POST /api/ui-recordings`：`{environmentRef,target}`，启动独立浏览器，返回 `{id,environmentRef,target,state,actions}`。一次仅允许一个活动 UI 录制；使用环境允许域名及证书配置。
+- `GET /api/ui-recordings`：活动录制及持久化的停止记录。
+- `GET /api/ui-recordings/:id`：刷新操作列表。
+- `POST /api/ui-recordings/:id/stop`：停止并持久化录制动作，关闭浏览器。服务关闭也会关闭活动浏览器。
+- `POST /api/auth-profiles`：录制审核后仍通过此接口保存；新增可选 `recordingRef`、`environmentRef`。绑定环境的协议不能用于其他环境。
+
+录制支持主页面 navigate、click、fill、selectOption、press Enter 和导航后 waitForURL；暂不支持 iframe、新窗口和复杂拖拽。填写及下拉动作只保存 `secretRef: UI_INPUT_1` 等服务端环境变量名，不采集具体值；回放前应配置对应变量，或在审核时调整引用。选择器优先使用唯一 id、data-testid、name、aria-label，最后回退 DOM 位置选择器，需人工审核。导航等待不保存跳转 URL 查询参数和片段。
+
+执行时先回放 AuthProfile.actions，等待 readySelector，再用同一 BrowserContext.request 执行接口调用，共享 Cookie。localStorage 的 Token 仍需配置 tokenSources（逻辑变量名到 storageKey/prefix），并通过 headers 的 AUTH_CONTEXT 绑定；不保存录制时的 Cookie 或 Token 值。额外 Plan.uiActions 执行后会重新提取认证变量。

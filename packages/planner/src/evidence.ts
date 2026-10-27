@@ -41,6 +41,17 @@ export function interfaceFacts(
   const requests = recording.requests.filter((r) =>
     asset.sources.includes(r.id),
   );
+  asset = structuredClone(asset);
+  // Replace historic name-based guesses with the observed header value.
+  for (const [name, value] of Object.entries(requests[0]?.headers ?? {})) {
+    if (protocol.test(name) || name.toLowerCase() === "cookie") continue;
+    asset.headers[name] =
+      !credential.test(name) &&
+      redact(value, name) === value &&
+      !value.includes("[REDACTED]")
+        ? { source: "STATIC", value }
+        : { source: "MANUAL_REVIEW" };
+  }
   const variants = new Map<string, (typeof requests)[number]>();
   for (const r of requests) {
     const shape = JSON.stringify({
@@ -188,7 +199,8 @@ export function dataCandidates(
   ) => {
     if (
       value === undefined ||
-      JSON.stringify(redact(value)) !== JSON.stringify(value) ||
+      JSON.stringify(redact(value, location === "HEADER" ? path : "")) !==
+        JSON.stringify(value) ||
       /\[(?:REDACTED|REQUEST BODY LIMIT|NON-JSON[^\]]*|[^\]]*OMITTED[^\]]*)\]/.test(
         JSON.stringify(value),
       )
@@ -273,4 +285,52 @@ export function validatePlanData(plan: Plan, candidates: DataCandidate[]) {
         check(binding);
   }
   return values;
+}
+
+// Header defaults are evidence, not a model inference. Preserve values in datasets.
+export function applyRecordedHeaders(
+  plan: Plan,
+  catalog: CatalogInterface[],
+  candidates: DataCandidate[],
+  authHeaders: Record<string, Binding> = {},
+): Plan {
+  const result = structuredClone(plan);
+  result.parameters ??= {};
+  const configured = new Set(
+    Object.keys(authHeaders).map((name) => name.toLowerCase()),
+  );
+  for (const step of result.steps) {
+    const item = catalog.find((item) => item.apiId === step.apiId);
+    if (!item) continue;
+    for (const name of Object.keys(step.headers)) {
+      if (
+        configured.has(name.toLowerCase()) ||
+        (!protocol.test(name) &&
+          !Object.keys(item.asset.headers).some(
+            (key) => key.toLowerCase() === name.toLowerCase(),
+          ))
+      )
+        delete step.headers[name];
+    }
+    for (const [name, info] of Object.entries(item.customHeaders)) {
+      if (configured.has(name.toLowerCase())) continue;
+      const existing = Object.keys(step.headers).find(
+        (key) => key.toLowerCase() === name.toLowerCase(),
+      );
+      const binding = existing ? step.headers[existing] : undefined;
+      if (binding?.source === "RESPONSE_VARIABLE") continue;
+      if (existing) delete step.headers[existing];
+      const candidate = candidates.find(
+        (c) =>
+          c.apiId === step.apiId &&
+          c.location === "HEADER" &&
+          c.path.toLowerCase() === name.toLowerCase(),
+      );
+      if (candidate) {
+        step.headers[name] = { source: "TEST_DATA", name: candidate.name };
+        result.parameters[candidate.name] = candidate.type;
+      } else step.headers[name] = structuredClone(info.binding) as Binding;
+    }
+  }
+  return result;
 }

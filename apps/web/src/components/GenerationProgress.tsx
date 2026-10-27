@@ -96,6 +96,35 @@ export function GenerationProgress({
       setResuming(undefined);
     }
   };
+  const regenerate = async (job: Generation) => {
+    setResuming(job.id);
+    try {
+      const response = await fetch(
+        `/api/generations/${job.id}/regenerate-plan`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ revision: job.revision }),
+        },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      const fresh = await fetch(`/api/generations/${job.id}`);
+      if (!fresh.ok) throw new Error(await fresh.text());
+      const next = (await fresh.json()) as Generation;
+      setJobs((all) =>
+        all.map((item) =>
+          item.id === job.id
+            ? { ...next, active: next.state === "RUNNING" }
+            : item,
+        ),
+      );
+      setError("");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setResuming(undefined);
+    }
+  };
   return (
     <section>
       <h3>生成工作流</h3>
@@ -270,6 +299,16 @@ export function GenerationProgress({
                         · 尝试 {stage.attempts}
                       </span>
                     </div>
+                    {stage.id === "PLAN_DESIGN" &&
+                      job.pipelineVersion === 2 &&
+                      job.caseConfirmed && (
+                        <button
+                          disabled={job.active !== false || resuming === job.id}
+                          onClick={() => void regenerate(job)}
+                        >
+                          重新生成计划
+                        </button>
+                      )}
                     {stage.error && <pre className="error">{stage.error}</pre>}
                     {stage.output !== undefined ? (
                       <details>

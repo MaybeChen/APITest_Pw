@@ -177,6 +177,34 @@ it("persists both confirmation gates, rejects stale edits, and reuses interface 
     expect(job.datasetCandidate?.planId).toBe(job.plan!.planId);
     expect(calls.filter((c) => c === "PLAN_DESIGN")).toHaveLength(1);
     expect(job.validation?.blockingErrors).toEqual([]);
+    const confirmedCase = structuredClone(job.testCase);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/generations/${id}/regenerate-plan`,
+          payload: { revision: job.revision - 1 },
+        })
+      ).statusCode,
+    ).toBe(409);
+    const regenerated = await app.inject({
+      method: "POST",
+      url: `/api/generations/${id}/regenerate-plan`,
+      payload: { revision: job.revision },
+    });
+    expect(regenerated.statusCode, regenerated.body).toBe(200);
+    job = await wait(id, "NEEDS_REVIEW");
+    expect(job.testCase).toEqual(confirmedCase);
+    expect(calls.filter((c) => c === "PLAN_DESIGN")).toHaveLength(2);
+    expect(calls.filter((c) => c === "CASE_DESIGN")).toHaveLength(1);
+    expect(calls.filter((c) => c === "API_ORGANIZATION")).toHaveLength(1);
+    expect(job.stages.find((s) => s.id === "VALIDATION")?.state).toBe(
+      "SUCCEEDED",
+    );
+    expect(["SUCCEEDED", "SKIPPED"]).toContain(
+      job.stages.find((s) => s.id === "FINAL_VALIDATION")?.state,
+    );
+    expect(job.datasetCandidate?.planId).toBe(job.plan!.planId);
     const response = await app.inject({
       method: "POST",
       url: "/api/approve",

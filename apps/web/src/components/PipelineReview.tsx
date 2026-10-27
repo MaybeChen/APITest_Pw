@@ -310,11 +310,17 @@ export function PipelineReview({
               onChange={(e) => setAuthProfileRef(e.target.value)}
             >
               <option value="">请选择已配置的认证协议</option>
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.id}
-                </option>
-              ))}
+              {profiles
+                .filter(
+                  (profile) =>
+                    !profile.environmentRef ||
+                    profile.environmentRef === job.input.environment.id,
+                )
+                .map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.id}
+                  </option>
+                ))}
             </select>
           </label>
           <label className="check-row">

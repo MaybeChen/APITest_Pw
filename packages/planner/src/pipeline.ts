@@ -19,6 +19,7 @@ import {
   type PipelineTask,
 } from "./pipeline-contracts.js";
 import {
+  applyRecordedHeaders,
   batchItems,
   compact,
   dataCandidates,
@@ -198,6 +199,31 @@ export function confirmCase(job: Generation, value: unknown) {
   testCase.status = "DRAFT";
   job.testCase = testCase;
   job.caseConfirmed = true;
+}
+export function regeneratePlan(job: Generation) {
+  if (
+    job.pipelineVersion !== 2 ||
+    !job.selectionConfirmed ||
+    !job.caseConfirmed ||
+    !job.testCase
+  )
+    throw new Error("请先确认接口和语义用例，再重新生成计划");
+  delete job.plan;
+  delete job.validation;
+  delete job.datasetCandidate;
+  delete job.error;
+  const downstream = new Set([
+    "PLAN_DESIGN",
+    "VALIDATION",
+    "PLAN_REPAIR",
+    "FINAL_VALIDATION",
+  ]);
+  for (let i = 0; i < job.stages.length; i++) {
+    const stage = job.stages[i];
+    if (downstream.has(stage.id))
+      job.stages[i] = { id: stage.id, state: "PENDING", attempts: 0 };
+  }
+  job.state = "RUNNING";
 }
 export function resetScenario(job: Generation, scenario: string) {
   if (
@@ -502,22 +528,28 @@ export async function executePipeline(
         type: d.valueType,
         confirmed: false,
       }));
-    const normalize = (plan: z.infer<typeof planSchema>) => ({
-      ...plan,
-      planId: `${job.id}-plan`,
-      caseId: job.input.caseId,
-      caseVersion: job.input.caseVersion,
-      version: job.input.planVersion,
-      environmentRef: job.input.environment.id,
-      authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
-      cleanupPolicy: "ALWAYS" as const,
-      status: "DRAFT" as const,
-      model: { provider: provider.name, version: provider.version },
-      steps: plan.steps.map((s) => ({
-        ...s,
-        assertions: s.assertions.map((a) => ({ ...a, confirmed: false })),
-      })),
-    });
+    const normalize = (plan: z.infer<typeof planSchema>) =>
+      applyRecordedHeaders(
+        {
+          ...plan,
+          planId: `${job.id}-plan`,
+          caseId: job.input.caseId,
+          caseVersion: job.input.caseVersion,
+          version: job.input.planVersion,
+          environmentRef: job.input.environment.id,
+          authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
+          cleanupPolicy: "ALWAYS" as const,
+          status: "DRAFT" as const,
+          model: { provider: provider.name, version: provider.version },
+          steps: plan.steps.map((s) => ({
+            ...s,
+            assertions: s.assertions.map((a) => ({ ...a, confirmed: false })),
+          })),
+        },
+        selected,
+        candidates,
+        job.authContract?.headers,
+      );
     job.plan = await run("PLAN_DESIGN", async () =>
       normalize(
         await call<z.infer<typeof planSchema>>(
@@ -549,7 +581,7 @@ export async function executePipeline(
           },
           stageFor("PLAN_DESIGN"),
           (plan) => {
-            validatePlanData(plan, candidates);
+            validatePlanData(normalize(plan), candidates);
             if (plan.steps.some((s) => !job.selectedApiIds!.includes(s.apiId)))
               throw new Error("调用计划引用了用户未选择的接口");
           },

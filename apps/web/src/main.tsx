@@ -1,3 +1,4 @@
+import { UIFlowRecorder } from "./components/UIFlowRecorder";
 import { RecordingHistory } from "./components/RecordingHistory";
 import type { Generation } from "../../../packages/planner/src/workflow";
 import { Datasets } from "./components/Datasets";
@@ -1379,6 +1380,15 @@ function App() {
                 </div>
               ))}
             </section>
+            <UIFlowRecorder
+              environments={environments}
+              onSaved={async (profile) => {
+                await refresh();
+                setConfigKind("auth-profiles");
+                setConfigDirty(false);
+                setConfigId(profile.id);
+              }}
+            />
             <section>
               <h2>环境与 UI 认证协议</h2>
               <p>

@@ -39,6 +39,8 @@ export const action = z.object({
     "navigate",
     "click",
     "fill",
+    "press",
+    "selectOption",
     "waitForURL",
     "waitForSelector",
     "assertVisible",
@@ -259,6 +261,8 @@ export const planSchema = z.object({
 });
 export const authSchema = z.object({
   id,
+  recordingRef: id.optional(),
+  environmentRef: id.optional(),
   actions: z.array(action),
   readySelector: id,
   headers: z.record(z.string(), binding).default({}),

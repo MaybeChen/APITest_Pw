@@ -35,6 +35,8 @@ export async function uiAuthenticate(
   profile: AuthProfile,
   env: Environment,
 ) {
+  if (profile.environmentRef && profile.environmentRef !== env.id)
+    throw new Error("UI flow environment mismatch");
   for (const action of profile.actions) {
     switch (action.type) {
       case "navigate":
@@ -51,6 +53,19 @@ export async function uiAuthenticate(
         await page.locator(action.target).fill(value);
         break;
       }
+      case "selectOption": {
+        const value = action.secretRef
+          ? process.env[action.secretRef]
+          : action.value;
+        if (value === undefined)
+          throw new Error(`Missing UI input reference ${action.secretRef}`);
+        await page.locator(action.target).selectOption(value);
+        break;
+      }
+      case "press":
+        if (!action.value) throw new Error("Missing UI key");
+        await page.locator(action.target).press(action.value);
+        break;
       case "click":
         await page.locator(action.target).click();
         break;
@@ -166,7 +181,7 @@ export async function run(
     report.auth.status = "READY";
     // Approved preconditions use the same declarative interpreter.
     if (p.uiActions.length)
-      await uiAuthenticate(
+      auth = await uiAuthenticate(
         context,
         page,
         { ...authProfile, actions: p.uiActions },

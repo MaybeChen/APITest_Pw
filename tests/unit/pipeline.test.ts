@@ -12,6 +12,7 @@ import {
   executePipeline,
   confirmInterfaces,
   confirmCase,
+  regeneratePlan,
 } from "../../packages/planner/src/pipeline";
 import { demoEnv, demoArtifacts } from "../../apps/server/src/demo";
 import {
@@ -179,6 +180,7 @@ it("batches interface facts, includes only candidate context, and enforces both 
   expect(job.plan?.authProfileRef).toBe("demo-auth");
   expect(job.datasetCandidate?.rows[0].values).toEqual({
     data_1: { name: "recorded-topic" },
+    data_3: "tenant-a",
   });
   expect(job.plan?.steps[0].body).toEqual({
     source: "TEST_DATA",
@@ -506,4 +508,101 @@ it("normalizes null model bodies in plan and repair while preserving explicit bo
   expect(() =>
     taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
   ).toThrow();
+});
+
+it("clears only plan stages and derived artifacts when regenerating a confirmed case", async () => {
+  const { model } = provider();
+  const job = createPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  expect(() => regeneratePlan(job)).toThrow("请先确认");
+  await executePipeline(job, model);
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  await executePipeline(job, model);
+  confirmCase(job, job.testCase);
+  await executePipeline(job, model);
+  const upstream = structuredClone(job.stages.slice(0, 3));
+  const testCase = structuredClone(job.testCase);
+  regeneratePlan(job);
+  expect(job.testCase).toEqual(testCase);
+  expect(job.stages.slice(0, 3)).toEqual(upstream);
+  expect(
+    job.stages
+      .slice(3)
+      .every(
+        (s) => s.state === "PENDING" && s.output === undefined && !s.error,
+      ),
+  ).toBe(true);
+  expect(job.plan).toBeUndefined();
+  expect(job.validation).toBeUndefined();
+  expect(job.datasetCandidate).toBeUndefined();
+  expect(job.caseConfirmed).toBe(true);
+});
+
+it("keeps captured custom header values instead of guessing UUIDs, timestamps or auth names", async () => {
+  const { analyze } = await import("../../packages/recorder/src/index");
+  const { interfaceFacts, applyRecordedHeaders } =
+    await import("../../packages/planner/src/evidence");
+  const { redact } = await import("../../packages/core/src/index");
+  const captured = structuredClone(recording);
+  captured.requests[0].headers = {
+    "x-adc-page-timestamp": "1793059200000",
+    "x-request-id": "original-request-id",
+    "x-nonce": "original-nonce",
+    "x-adc-page-token": "[REDACTED]",
+  };
+  expect(redact(captured.requests[0].headers)["x-adc-page-timestamp"]).toBe(
+    "1793059200000",
+  );
+  const asset = analyze(captured).assets[0];
+  expect(asset.headers["x-adc-page-timestamp"]).toEqual({
+    source: "STATIC",
+    value: "1793059200000",
+  });
+  expect(asset.headers["x-adc-page-token"]).toEqual({
+    source: "MANUAL_REVIEW",
+  });
+  // Existing interface snapshots may still contain the old guessed binding.
+  asset.headers["x-adc-page-timestamp"] = {
+    source: "RUNTIME_GENERATED",
+    kind: "uuid",
+  };
+  const catalog = [interfaceFacts(captured, asset)];
+  const candidates = dataCandidates(captured, catalog);
+  const plan = structuredClone(demoArtifacts().plan);
+  plan.steps = [plan.steps[0]];
+  plan.steps[0].apiId = asset.apiId;
+  plan.steps[0].headers = {
+    "x-adc-page-timestamp": { source: "RUNTIME_GENERATED", kind: "uuid" },
+    "x-nonce": { source: "RUNTIME_GENERATED", kind: "timestamp" },
+    "x-invented": { source: "STATIC", value: "invented" },
+    "x-adc-page-token": { source: "AUTH_CONTEXT", name: "guessed" },
+  };
+  const normalized = applyRecordedHeaders(plan, catalog, candidates);
+  for (const name of ["x-adc-page-timestamp", "x-request-id", "x-nonce"]) {
+    const binding = normalized.steps[0].headers[name];
+    expect(binding.source).toBe("TEST_DATA");
+    if (binding.source === "TEST_DATA")
+      expect(candidates.find((c) => c.name === binding.name)?.value).toBe(
+        captured.requests[0].headers[name],
+      );
+  }
+  expect(normalized.steps[0].headers["x-invented"]).toBeUndefined();
+  expect(normalized.steps[0].headers["x-adc-page-token"]).toEqual({
+    source: "MANUAL_REVIEW",
+  });
+  const dynamic = {
+    source: "RESPONSE_VARIABLE",
+    name: "nonce",
+    fromStep: "previous",
+  } as const;
+  plan.steps[0].headers["x-nonce"] = dynamic;
+  expect(
+    applyRecordedHeaders(plan, catalog, candidates).steps[0].headers["x-nonce"],
+  ).toEqual(dynamic);
+  const configured = applyRecordedHeaders(plan, catalog, candidates, {
+    "x-adc-page-token": { source: "AUTH_CONTEXT", name: "configured" },
+  });
+  expect(configured.steps[0].headers["x-adc-page-token"]).toBeUndefined();
 });

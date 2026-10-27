@@ -725,6 +725,7 @@ test("reviews recommended interfaces and edited semantic expectations before gen
   };
   const job: any = {
     id: "review-pipeline-job",
+    active: false,
     revision: 10,
     pipelineVersion: 2,
     state: "WAITING_INTERFACE_REVIEW",
@@ -883,7 +884,33 @@ test("reviews recommended interfaces and edited semantic expectations before gen
   await page
     .getByRole("checkbox", { name: "我已确认前置条件、输入步骤及预期结果" })
     .check();
+  await page.route("**/api/generations/review-pipeline-job", (route) =>
+    route.fulfill({ json: job }),
+  );
+  await page.route(
+    "**/api/generations/review-pipeline-job/regenerate-plan",
+    async (route) => {
+      submissions.push({
+        phase: "regenerate",
+        data: route.request().postDataJSON(),
+      });
+      job.revision++;
+      await route.fulfill({ json: { id: job.id } });
+    },
+  );
   await page.getByRole("button", { name: "确认用例，生成调用计划" }).click();
+  const regenerate = page.getByRole("button", {
+    name: "重新生成计划",
+    exact: true,
+  });
+  await expect(regenerate).toBeEnabled();
+  await regenerate.click();
+  await expect
+    .poll(() => submissions.filter((s) => s.phase === "regenerate").length)
+    .toBe(1);
+  expect(submissions.find((s) => s.phase === "regenerate").data.revision).toBe(
+    12,
+  );
   await page.getByRole("button", { name: "打开草稿", exact: true }).click();
   expect(submissions[1].data.testCase.steps[0].expected).toBe(
     "人工确认：订单创建成功",
@@ -891,4 +918,75 @@ test("reviews recommended interfaces and edited semantic expectations before gen
   await expect(page.getByLabel("数据组（JSON 数组）")).toHaveValue(
     /采集的订单名称/,
   );
+});
+
+test("records, reviews and saves a reusable precondition UI profile from configuration", async ({
+  page,
+}) => {
+  const snapshot: any = {
+    id: "ui-flow-test",
+    environmentRef: "demo",
+    target: "http://127.0.0.1:3100/login",
+    state: "RECORDING",
+    actions: [{ type: "navigate", target: "http://127.0.0.1:3100/login" }],
+  };
+  let started = false;
+  let saved: any;
+  await page.route("**/api/ui-recordings", async (route) => {
+    if (route.request().method() === "POST") {
+      started = true;
+      await route.fulfill({ json: snapshot });
+    } else await route.fulfill({ json: started ? [snapshot] : [] });
+  });
+  await page.route("**/api/ui-recordings/ui-flow-test", (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.route("**/api/ui-recordings/ui-flow-test/stop", async (route) => {
+    snapshot.state = "STOPPED";
+    snapshot.actions.push({
+      type: "fill",
+      target: "#password",
+      secretRef: "UI_INPUT_1",
+    });
+    await route.fulfill({ json: snapshot });
+  });
+  await page.route("**/api/auth-profiles", async (route) => {
+    if (route.request().method() === "POST") {
+      saved = route.request().postDataJSON();
+      await route.fulfill({ json: saved });
+    } else await route.fulfill({ json: saved ? [saved] : [] });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "前置 UI 流程录制" }),
+  ).toBeVisible();
+  await page.getByLabel("前置 UI 起始地址").fill(snapshot.target);
+  await page
+    .getByRole("button", { name: "开始前置 UI 录制", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "开始前置 UI 录制", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "停止前置 UI 录制", exact: true })
+    .click();
+  await expect(page.getByLabel("前置 UI 动作 JSON")).toHaveValue(/UI_INPUT_1/);
+  await page.getByLabel("前置 UI 协议 ID").fill("recorded-login");
+  await page.getByLabel("前置 UI 就绪元素").fill("#ready");
+  await page
+    .getByRole("button", { name: "保存前置 UI 协议", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "前置 UI 协议 recorded-login 已保存，请在生成调用计划时选择该协议。",
+    ),
+  ).toBeVisible();
+  expect(saved.recordingRef).toBe("ui-flow-test");
+  expect(saved.readySelector).toBe("#ready");
+  expect(saved.actions[1]).toEqual({
+    type: "fill",
+    target: "#password",
+    secretRef: "UI_INPUT_1",
+  });
 });

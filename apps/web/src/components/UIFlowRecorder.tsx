@@ -1,0 +1,293 @@
+import { useEffect, useState } from "react";
+import type {
+  Environment,
+  AuthProfile,
+} from "../../../../packages/contracts/src/index";
+type Snapshot = {
+  id: string;
+  environmentRef: string;
+  target: string;
+  state: "RECORDING" | "STOPPED";
+  actions: AuthProfile["actions"];
+};
+async function api<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(
+    `/api${path}`,
+    body === undefined
+      ? undefined
+      : {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+  );
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<T>;
+}
+export function UIFlowRecorder({
+  environments,
+  onSaved,
+}: {
+  environments: Environment[];
+  onSaved: (profile: AuthProfile) => Promise<void>;
+}) {
+  const [environmentRef, setEnvironmentRef] = useState(
+    environments[0]?.id ?? "",
+  );
+  const [target, setTarget] = useState(environments[0]?.baseURL ?? "");
+  const [recording, setRecording] = useState<Snapshot>();
+  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [profileId, setProfileId] = useState("");
+  const [readySelector, setReadySelector] = useState("");
+  const [actions, setActions] = useState("[]");
+  const [tokens, setTokens] = useState("{}");
+  const [headers, setHeaders] = useState("{}");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const load = (snapshot: Snapshot) => {
+    setRecording(snapshot);
+    setActions(JSON.stringify(snapshot.actions, null, 2));
+    setEnvironmentRef(snapshot.environmentRef);
+    setTarget(snapshot.target);
+  };
+  useEffect(() => {
+    let cancelled = false;
+    void api<Snapshot[]>("/ui-recordings")
+      .then((items) => {
+        if (cancelled) return;
+        setHistory(items);
+        const active = items.find((item) => item.state === "RECORDING");
+        if (active) load(active);
+      })
+      .catch((error) => {
+        if (!cancelled) setError(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (recording?.state !== "RECORDING") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const snapshot = await api<Snapshot>(`/ui-recordings/${recording.id}`);
+        if (!cancelled) load(snapshot);
+      } catch (error) {
+        if (!cancelled) setError(String(error));
+      } finally {
+        if (!cancelled) timer = setTimeout(() => void refresh(), 1500);
+      }
+    };
+    void refresh();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [recording?.id, recording?.state]);
+  const task = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await work();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const active = recording?.state === "RECORDING";
+  return (
+    <section>
+      <h2>前置 UI 流程录制</h2>
+      <p>
+        录制登录及页面准备操作，审核后保存为 UI
+        认证协议。接口执行前回放操作，并共享浏览器 Cookie。
+      </p>
+      <p>
+        填写动作仅记录元素定位和 UI_INPUT_1
+        等环境变量名，不采集输入值。请在后端配置对应变量，或在动作 JSON 中调整
+        secretRef。支持主页面点击、文本填写、下拉选择和 Enter 提交。暂不支持
+        iframe、弹窗新页及复杂拖拽。
+      </p>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      <label>
+        前置 UI 环境
+        <select
+          aria-label="前置 UI 环境"
+          disabled={active || busy}
+          value={environmentRef}
+          onChange={(e) => {
+            setEnvironmentRef(e.target.value);
+            setTarget(
+              environments.find((item) => item.id === e.target.value)
+                ?.baseURL ?? "",
+            );
+          }}
+        >
+          {environments.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.id}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        前置 UI 起始地址
+        <input
+          value={target}
+          disabled={active || busy}
+          onChange={(e) => setTarget(e.target.value)}
+        />
+      </label>
+      <div className="toolbar">
+        <button
+          disabled={active || busy || !target || !environmentRef}
+          onClick={() =>
+            void task(async () => {
+              load(
+                await api<Snapshot>("/ui-recordings", {
+                  target,
+                  environmentRef,
+                }),
+              );
+              setNotice(
+                "请在打开的录制浏览器中完成登录和页面准备，再停止录制。",
+              );
+            })
+          }
+        >
+          开始前置 UI 录制
+        </button>
+        <button
+          disabled={!active || busy}
+          onClick={() =>
+            void task(async () => {
+              load(
+                await api<Snapshot>(`/ui-recordings/${recording!.id}/stop`, {}),
+              );
+              setHistory(await api<Snapshot[]>("/ui-recordings"));
+              setNotice(
+                "录制已保存。请审核动作、配置输入变量，并填写登录成功后的就绪元素。",
+              );
+            })
+          }
+        >
+          停止前置 UI 录制
+        </button>
+      </div>
+      <label>
+        历史前置 UI 录制
+        <select
+          disabled={active || busy}
+          value={recording?.id ?? ""}
+          onChange={(e) => {
+            const item = history.find((item) => item.id === e.target.value);
+            if (item) load(item);
+          }}
+        >
+          <option value="">选择录制</option>
+          {history.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.target} · {item.id.slice(0, 8)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {recording && (
+        <>
+          <p>
+            {active ? "录制中" : "已停止"} · 共 {recording.actions.length}{" "}
+            个动作
+          </p>
+          <label>
+            前置 UI 动作 JSON
+            <textarea
+              className="json"
+              disabled={active || busy}
+              value={actions}
+              onChange={(e) => setActions(e.target.value)}
+            />
+          </label>
+          <label>
+            前置 UI 协议 ID
+            <input
+              disabled={active || busy}
+              value={profileId}
+              onChange={(e) => setProfileId(e.target.value)}
+              placeholder="例如 evaluation-ui-auth"
+            />
+          </label>
+          <label>
+            前置 UI 就绪元素
+            <input
+              disabled={active || busy}
+              value={readySelector}
+              onChange={(e) => setReadySelector(e.target.value)}
+              placeholder="登录后稳定可见的 CSS 选择器"
+            />
+          </label>
+          <p>
+            Cookie 自动共享。仅在接口还需要额外 Token Header
+            时配置下面两项；tokenSources 从 localStorage 提取，Header 的
+            AUTH_CONTEXT.name 引用其逻辑名称。
+          </p>
+          <label>
+            前置 UI Token 来源 JSON
+            <textarea
+              disabled={active || busy}
+              value={tokens}
+              onChange={(e) => setTokens(e.target.value)}
+              placeholder={
+                '{"pageToken":{"storageKey":"实际存储键","prefix":""}}'
+              }
+            />
+          </label>
+          <label>
+            前置 UI Header 绑定 JSON
+            <textarea
+              disabled={active || busy}
+              value={headers}
+              onChange={(e) => setHeaders(e.target.value)}
+              placeholder={
+                '{"x-page-token":{"source":"AUTH_CONTEXT","name":"pageToken"}}'
+              }
+            />
+          </label>
+          <button
+            disabled={
+              active || busy || !profileId.trim() || !readySelector.trim()
+            }
+            onClick={() =>
+              void task(async () => {
+                const profile = await api<AuthProfile>("/auth-profiles", {
+                  id: profileId.trim(),
+                  actions: JSON.parse(actions),
+                  readySelector: readySelector.trim(),
+                  tokenSources: JSON.parse(tokens),
+                  headers: JSON.parse(headers),
+                  recordingRef: recording.id,
+                  environmentRef,
+                });
+                await onSaved(profile);
+                setNotice(
+                  `前置 UI 协议 ${profile.id} 已保存，请在生成调用计划时选择该协议。`,
+                );
+              })
+            }
+          >
+            保存前置 UI 协议
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
