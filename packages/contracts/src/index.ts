@@ -212,7 +212,8 @@ export const assertion = z.object({
   operator: z.enum(["eq", "exists", "notExists"]),
   value: z.unknown().optional(),
   dataRef: id.optional(),
-  basis: z.enum(["CONTRACT", "RECORDING", "USER"]),
+  basis: z.enum(["CONTRACT", "RECORDING", "USER", "INFERRED"]),
+  basisNote: z.string().optional(),
   confirmed: z.boolean(),
 });
 export const stepSchema = z.object({

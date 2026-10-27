@@ -73,3 +73,5 @@ WAITING_INTERFACE_REVIEW / WAITING_CASE_REVIEW 为持久化状态。确认接口
 输入预算使用序列化提示的 UTF-8 字节数加余量做保守 token 估算，覆盖系统 Schema；超出预算直接拒绝请求。该估算不是服务实际 usage，不自动探测模型上下文容量。输出显式设置 max_tokens 并检测 finish_reason=length，截断结果不会被当作合法产物。批次与阶段分别保存成功输出，恢复时只继续未完成批次。复用目录创建新场景时另建任务和 Case 身份，复用完成的整理结果，保留原任务。
 
 自定义 Header 的默认值来自录制事实，不按字段名推断 UUID、nonce、timestamp 或认证上下文。新分析保存安全采集值；新版计划编译时将这些值放入独立数据集并自动补齐 TEST_DATA 绑定。已由用户认证协议配置的 Header 由认证层提供，明确的上游 RESPONSE_VARIABLE 绑定仍需通过依赖校验；其他模型猜测被采集默认值替换。已脱敏的认证值不能恢复原文，保持待审核而不编造来源。秒/毫秒 epoch timestamp 字段不按银行卡号规则脱敏。
+
+模型计划输出的可选字段 null 在解析边界规范为省略（不处理绑定内部 value:null 和断言 value:null，它们仍为合法 JSON 值）。resourceVariable 缺失时仍须通过资源归属及清理校验。断言 basis 支持 CONTRACT、RECORDING、USER 和 INFERRED；未知字符串保留在 basisNote，规范为 INFERRED 并清除 confirmed，避免将模型推断伪装成已确认来源。公共契约仍拒绝非法字段类型。

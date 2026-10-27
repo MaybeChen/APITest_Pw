@@ -606,3 +606,57 @@ it("keeps captured custom header values instead of guessing UUIDs, timestamps or
   });
   expect(configured.steps[0].headers["x-adc-page-token"]).toBeUndefined();
 });
+
+it("normalizes absent optional plan fields and preserves honest assertion provenance", async () => {
+  const { normalizeTaskOutput, taskSchemas } =
+    await import("../../packages/planner/src/pipeline-contracts");
+  const raw: any = structuredClone(demoArtifacts().plan);
+  raw.steps[0].resourceVariable = null;
+  raw.steps[0].bodyBindings = null;
+  raw.steps[0].assertions[0] = {
+    kind: "json",
+    path: "$.value",
+    operator: "eq",
+    value: null,
+    dataRef: null,
+    basis: "MODEL_GUESS",
+    confirmed: true,
+  };
+  const normalized = taskSchemas.PLAN_DESIGN.parse(
+    normalizeTaskOutput("PLAN_DESIGN", raw),
+  );
+  expect(normalized.steps[0]).not.toHaveProperty("resourceVariable");
+  expect(normalized.steps[0]).not.toHaveProperty("bodyBindings");
+  expect(normalized.steps[0].assertions[0]).toMatchObject({
+    value: null,
+    basis: "INFERRED",
+    confirmed: false,
+    basisNote: "模型返回的未识别依据：MODEL_GUESS",
+  });
+  expect(raw.steps[0].resourceVariable).toBeNull();
+  const fixture = demoArtifacts();
+  normalized.steps[0].ownsResource = true;
+  expect(
+    validate(fixture.testCase, normalized, fixture.assets, demoEnv),
+  ).toContain("Owned resource requires extraction");
+  const repaired = taskSchemas.PLAN_REPAIR.parse(
+    normalizeTaskOutput("PLAN_REPAIR", {
+      replacements: [raw.steps[0]],
+      reason: "修复",
+    }),
+  );
+  expect(repaired.replacements[0]).not.toHaveProperty("resourceVariable");
+  raw.steps[0].resourceVariable = "createdId";
+  raw.steps[0].assertions[0].basis = " recording ";
+  expect(
+    taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw))
+      .steps[0],
+  ).toMatchObject({
+    resourceVariable: "createdId",
+    assertions: [{ basis: "RECORDING" }],
+  });
+  raw.steps[0].resourceVariable = 123;
+  expect(() =>
+    taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
+  ).toThrow();
+});

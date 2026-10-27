@@ -136,13 +136,45 @@ export function normalizeTaskOutput(
     task === "PLAN_DESIGN"
       ? (output as { steps?: unknown }).steps
       : (output as { replacements?: unknown }).replacements;
+  if (task === "PLAN_DESIGN") {
+    for (const key of ["parameters", "execution"])
+      if ((output as Record<string, unknown>)[key] === null)
+        delete (output as Record<string, unknown>)[key];
+  }
   if (!Array.isArray(nodes)) return output;
   for (const node of nodes) {
     if (!node || typeof node !== "object") continue;
     // A literal JSON null body must be expressed through a Binding value.
-    if (node.body === null) delete node.body;
+    for (const key of [
+      "body",
+      "apiVersion",
+      "bodyBindings",
+      "extractTypes",
+      "parallelSafe",
+      "resourceLocks",
+      "resourceVariable",
+    ])
+      if (node[key] === null) delete node[key];
+    if (
+      typeof node.resourceVariable === "string" &&
+      !node.resourceVariable.trim()
+    )
+      delete node.resourceVariable;
     if (!Array.isArray(node.assertions)) continue;
     for (const assertion of node.assertions) {
+      if (!assertion || typeof assertion !== "object") continue;
+      for (const key of ["path", "dataRef", "basisNote"])
+        if (assertion[key] === null) delete assertion[key];
+      if (typeof assertion.basis === "string") {
+        const basis = assertion.basis.trim().toUpperCase();
+        if (["CONTRACT", "RECORDING", "USER", "INFERRED"].includes(basis))
+          assertion.basis = basis;
+        else {
+          assertion.basisNote = `模型返回的未识别依据：${assertion.basis.slice(0, 300)}`;
+          assertion.basis = "INFERRED";
+          assertion.confirmed = false;
+        }
+      }
       if (
         assertion &&
         typeof assertion.dataRef === "string" &&
@@ -165,6 +197,8 @@ export const taskInstructions: Record<PipelineTask, string> = {
   PLAN_REPAIR:
     "仅修复给出的局部执行节点和校验错误，返回 replacements 中被修改的既有节点；不得创建未知 ID、增加接口、改 Case、参数声明、环境权限或认证配置。必须保留业务语义、资源归属和清理策略。断言未使用测试数据预期值时省略 dataRef，禁止填空字符串。无请求体时省略 body；body 必须是 Binding 对象，不能为 null。修复时 bodyBindings 仅支持 $、$.field、$[0].field 形式；kind=status 只能用 eq 比较 100..599 的整数，业务 code 必须用 kind=json。AUTH_CONTEXT.name 必须存在于 authContract.availableContexts，不得将 Header 名当变量名；如果缺少来源应保留待审核并说明配置缺失，不得猜测或静默删除必要认证头。无法修复时返回空 replacements 与原因。",
 };
+const planOutputRules =
+  "可选字段没有值时省略，不要输出 null 或空字符串；resourceVariable 仅在资源归属/清理关联需要时填写。断言 basis 只能是 CONTRACT（实际契约）、RECORDING（采集证据）、USER（用户明确预期）或 INFERRED（模型推断/依据未确定），不得编造其他枚举。依据不明使用 INFERRED，confirmed=false，人工审核后才能执行。";
 // UTF-8 byte count is a deliberately conservative token proxy; not model usage.
 export function estimateTokens(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "null", "utf8");
@@ -173,7 +207,7 @@ export function taskMessages(task: PipelineTask, payload: unknown) {
   return [
     {
       role: "system",
-      content: `你是 API 测试规划助手。使用中文，只输出 JSON。${taskInstructions[task]} 输出 Schema：${JSON.stringify(z.toJSONSchema(taskSchemas[task]))}`,
+      content: `你是 API 测试规划助手。使用中文，只输出 JSON。${taskInstructions[task]} ${task === "PLAN_DESIGN" || task === "PLAN_REPAIR" ? planOutputRules : ""} 输出 Schema：${JSON.stringify(z.toJSONSchema(taskSchemas[task]))}`,
     },
     { role: "user", content: JSON.stringify(payload) },
   ];
