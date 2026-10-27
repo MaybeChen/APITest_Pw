@@ -660,3 +660,106 @@ it("normalizes absent optional plan fields and preserves honest assertion proven
     taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
   ).toThrow();
 });
+
+it("moves exact captured static inputs into data and rejects invented or coerced values with a location", async () => {
+  const { parameterizeRecordedInputs } =
+    await import("../../packages/planner/src/evidence");
+  const plan = structuredClone(demoArtifacts().plan);
+  plan.steps = [plan.steps[0]];
+  const step = plan.steps[0];
+  const candidates = [
+    {
+      name: "body_data",
+      type: "object" as const,
+      apiId: step.apiId,
+      location: "BODY" as const,
+      path: "$",
+      requestId: "request",
+      value: { name: "captured", enabled: true },
+    },
+    {
+      name: "query_data",
+      type: "string" as const,
+      apiId: step.apiId,
+      location: "QUERY" as const,
+      path: "page",
+      requestId: "request",
+      value: "1",
+    },
+    {
+      name: "path_data",
+      type: "string" as const,
+      apiId: step.apiId,
+      location: "PATH" as const,
+      path: "id",
+      requestId: "request",
+      value: "123",
+    },
+    {
+      name: "field_data",
+      type: "boolean" as const,
+      apiId: step.apiId,
+      location: "BODY" as const,
+      path: "$.enabled",
+      requestId: "request",
+      value: true,
+    },
+  ];
+  step.body = { source: "STATIC", value: { enabled: true, name: "captured" } };
+  step.query = { page: { source: "STATIC", value: "1" } };
+  step.path = { id: { source: "STATIC", value: "123" } };
+  step.bodyBindings = { "$.enabled": { source: "STATIC", value: true } };
+  const normalized = parameterizeRecordedInputs(plan, candidates);
+  expect(normalized.steps[0].body).toEqual({
+    source: "TEST_DATA",
+    name: "body_data",
+  });
+  expect(validatePlanData(normalized, candidates)).toEqual({
+    body_data: { name: "captured", enabled: true },
+    query_data: "1",
+    path_data: "123",
+    field_data: true,
+  });
+  expect(step.body.source).toBe("STATIC");
+  step.query.page = { source: "STATIC", value: 1 };
+  expect(() =>
+    validatePlanData(parameterizeRecordedInputs(plan, candidates), candidates),
+  ).toThrow(`位置 query.page`);
+  step.query = {};
+  step.body = { source: "STATIC", value: { name: "invented" } };
+  expect(() =>
+    validatePlanData(parameterizeRecordedInputs(plan, candidates), candidates),
+  ).toThrow(`步骤 ${step.id}，位置 body`);
+});
+
+it("finishes plan generation when a model inlines an unchanged recorded request body", async () => {
+  const { model, calls } = provider();
+  const original = model.runTask.bind(model);
+  model.runTask = async (...args) => {
+    const output = (await original(...args)) as any;
+    if (args[0] === "PLAN_DESIGN")
+      output.steps[0].body = {
+        source: "STATIC",
+        value: { name: "recorded-topic" },
+      };
+    return output;
+  };
+  const job = createPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  await executePipeline(job, model);
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  await executePipeline(job, model);
+  confirmCase(job, job.testCase);
+  await executePipeline(job, model);
+  expect(job.state, job.error).toBe("NEEDS_REVIEW");
+  expect(job.plan!.steps[0].body).toEqual({
+    source: "TEST_DATA",
+    name: "data_1",
+  });
+  expect(job.datasetCandidate!.rows[0].values.data_1).toEqual({
+    name: "recorded-topic",
+  });
+  expect(calls.filter((c) => c.task === "PLAN_DESIGN")).toHaveLength(1);
+});

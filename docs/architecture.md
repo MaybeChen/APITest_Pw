@@ -75,3 +75,5 @@ WAITING_INTERFACE_REVIEW / WAITING_CASE_REVIEW 为持久化状态。确认接口
 自定义 Header 的默认值来自录制事实，不按字段名推断 UUID、nonce、timestamp 或认证上下文。新分析保存安全采集值；新版计划编译时将这些值放入独立数据集并自动补齐 TEST_DATA 绑定。已由用户认证协议配置的 Header 由认证层提供，明确的上游 RESPONSE_VARIABLE 绑定仍需通过依赖校验；其他模型猜测被采集默认值替换。已脱敏的认证值不能恢复原文，保持待审核而不编造来源。秒/毫秒 epoch timestamp 字段不按银行卡号规则脱敏。
 
 模型计划输出的可选字段 null 在解析边界规范为省略（不处理绑定内部 value:null 和断言 value:null，它们仍为合法 JSON 值）。resourceVariable 缺失时仍须通过资源归属及清理校验。断言 basis 支持 CONTRACT、RECORDING、USER 和 INFERRED；未知字符串保留在 basisNote，规范为 INFERRED 并清除 confirmed，避免将模型推断伪装成已确认来源。公共契约仍拒绝非法字段类型。
+
+计划编译会将模型误内联的 STATIC 业务参数与同一接口、同一位置和字段路径的采集候选比较，只有值及类型完全一致时才自动转为 TEST_DATA 并补齐参数声明。对象比较不受字段排列顺序影响，不做字符串/数字转换；不同接口或位置的同值不复用。无法匹配的固定值继续阻断，并报告具体步骤及 Path/Query/Body 位置，供模型重试或人工处理。断言预期值及上游变量绑定不参与此转换。

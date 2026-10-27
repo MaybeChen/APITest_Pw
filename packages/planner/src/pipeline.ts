@@ -19,6 +19,7 @@ import {
   type PipelineTask,
 } from "./pipeline-contracts.js";
 import {
+  parameterizeRecordedInputs,
   applyRecordedHeaders,
   batchItems,
   compact,
@@ -529,26 +530,29 @@ export async function executePipeline(
         confirmed: false,
       }));
     const normalize = (plan: z.infer<typeof planSchema>) =>
-      applyRecordedHeaders(
-        {
-          ...plan,
-          planId: `${job.id}-plan`,
-          caseId: job.input.caseId,
-          caseVersion: job.input.caseVersion,
-          version: job.input.planVersion,
-          environmentRef: job.input.environment.id,
-          authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
-          cleanupPolicy: "ALWAYS" as const,
-          status: "DRAFT" as const,
-          model: { provider: provider.name, version: provider.version },
-          steps: plan.steps.map((s) => ({
-            ...s,
-            assertions: s.assertions.map((a) => ({ ...a, confirmed: false })),
-          })),
-        },
-        selected,
+      parameterizeRecordedInputs(
+        applyRecordedHeaders(
+          {
+            ...plan,
+            planId: `${job.id}-plan`,
+            caseId: job.input.caseId,
+            caseVersion: job.input.caseVersion,
+            version: job.input.planVersion,
+            environmentRef: job.input.environment.id,
+            authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
+            cleanupPolicy: "ALWAYS" as const,
+            status: "DRAFT" as const,
+            model: { provider: provider.name, version: provider.version },
+            steps: plan.steps.map((s) => ({
+              ...s,
+              assertions: s.assertions.map((a) => ({ ...a, confirmed: false })),
+            })),
+          },
+          selected,
+          candidates,
+          job.authContract?.headers,
+        ),
         candidates,
-        job.authContract?.headers,
       );
     job.plan = await run("PLAN_DESIGN", async () =>
       normalize(

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { observedSchema } from "../../recorder/src/index.js";
 import type {
   Recording,
@@ -258,21 +259,24 @@ export function validatePlanData(plan: Plan, candidates: DataCandidate[]) {
       throw new Error(`测试数据 ${name} 没有匹配的采集来源或类型`);
     values[name] = structuredClone(source.value);
   }
-  const check = (b: Binding | undefined) => {
+  const check = (b: Binding | undefined, stepId: string, location: string) => {
     if (
       b?.source === "STATIC" &&
       b.value !== undefined &&
       JSON.stringify(b.value) !== "{}"
     )
       throw new Error(
-        "业务输入不能嵌入流程，请使用接口采集数据的 TEST_DATA 引用",
+        `业务输入不能嵌入流程，请使用接口采集数据的 TEST_DATA 引用；步骤 ${stepId}，位置 ${location}，没有类型和值均匹配的采集数据。请从 dataParameters 选择对应来源，不要编造参数值。`,
       );
   };
   for (const step of plan.steps) {
-    Object.values(step.path).forEach(check);
-    Object.values(step.query).forEach(check);
-    Object.values(step.bodyBindings ?? {}).forEach(check);
-    check(step.body);
+    for (const [key, binding] of Object.entries(step.path))
+      check(binding, step.id, `path.${key}`);
+    for (const [key, binding] of Object.entries(step.query))
+      check(binding, step.id, `query.${key}`);
+    for (const [key, binding] of Object.entries(step.bodyBindings ?? {}))
+      check(binding, step.id, `bodyBindings[${key}]`);
+    check(step.body, step.id, "body");
     for (const [name, binding] of Object.entries(step.headers))
       if (
         candidates.some(
@@ -282,7 +286,7 @@ export function validatePlanData(plan: Plan, candidates: DataCandidate[]) {
             c.path.toLowerCase() === name.toLowerCase(),
         )
       )
-        check(binding);
+        check(binding, step.id, `headers.${name}`);
   }
   return values;
 }
@@ -331,6 +335,43 @@ export function applyRecordedHeaders(
         result.parameters[candidate.name] = candidate.type;
       } else step.headers[name] = structuredClone(info.binding) as Binding;
     }
+  }
+  return result;
+}
+
+// Move model-inlined evidence into data without changing its value or type.
+export function parameterizeRecordedInputs(
+  plan: Plan,
+  candidates: DataCandidate[],
+): Plan {
+  const result = structuredClone(plan);
+  result.parameters ??= {};
+  for (const step of result.steps) {
+    const bind = (
+      binding: Binding | undefined,
+      location: DataCandidate["location"],
+      path: string,
+    ): Binding | undefined => {
+      if (binding?.source !== "STATIC" || binding.value === undefined)
+        return binding;
+      const candidate = candidates.find(
+        (c) =>
+          c.apiId === step.apiId &&
+          c.location === location &&
+          c.path === path &&
+          isDeepStrictEqual(c.value, binding.value),
+      );
+      if (!candidate) return binding;
+      result.parameters![candidate.name] = candidate.type;
+      return { source: "TEST_DATA", name: candidate.name };
+    };
+    for (const [key, binding] of Object.entries(step.path))
+      step.path[key] = bind(binding, "PATH", key)!;
+    for (const [key, binding] of Object.entries(step.query))
+      step.query[key] = bind(binding, "QUERY", key)!;
+    step.body = bind(step.body, "BODY", "$");
+    for (const [key, binding] of Object.entries(step.bodyBindings ?? {}))
+      step.bodyBindings![key] = bind(binding, "BODY", key)!;
   }
   return result;
 }
