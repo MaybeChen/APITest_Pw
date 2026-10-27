@@ -373,7 +373,9 @@ export function validate(
       try {
         setAtPath({}, path, null);
       } catch (error) {
-        errors.push(String(error));
+        errors.push(
+          `${String(error)} in step ${s.id}, bodyBindings path ${JSON.stringify(path)}; use $ or $.field / $[0].field`,
+        );
       }
     }
     if (new Set(s.resourceLocks ?? []).size !== (s.resourceLocks ?? []).length)
@@ -424,7 +426,9 @@ export function validate(
           a.value < 100 ||
           a.value > 599)
       )
-        errors.push("Status assertion must compare an HTTP status");
+        errors.push(
+          `Status assertion must compare an HTTP status in step ${s.id}: use operator eq and an integer value from 100 to 599; business response codes require kind json`,
+        );
       if (
         a.kind === "json" &&
         a.operator === "eq" &&

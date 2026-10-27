@@ -153,3 +153,35 @@ it("persists stage checkpoints and resumes without repeating successful model st
   expect(restored.testCase?.caseId).toBe(job.input.caseId);
   expect(new Set(checkpoints).size).toBe(checkpoints.length);
 });
+
+it("identifies the exact nodes and paths for plan body and status repair", () => {
+  const b = demoArtifacts();
+  const bodyStep = b.plan.steps[0];
+  bodyStep.bodyBindings = { "/items/0/id": { source: "STATIC", value: 1 } };
+  const statusStep = b.plan.steps[1];
+  statusStep.assertions = [
+    {
+      kind: "status",
+      operator: "eq",
+      value: "200",
+      basis: "RECORDING",
+      confirmed: false,
+    },
+  ];
+  const errors = validate(b.testCase, b.plan, b.assets, demoEnv);
+  expect(
+    errors.some(
+      (e) =>
+        e.includes("Unsupported body binding path") &&
+        e.includes(`step ${bodyStep.id},`) &&
+        e.includes('"/items/0/id"'),
+    ),
+  ).toBe(true);
+  expect(
+    errors.some(
+      (e) =>
+        e.includes("Status assertion must compare an HTTP status") &&
+        e.includes(`step ${statusStep.id}:`),
+    ),
+  ).toBe(true);
+});
