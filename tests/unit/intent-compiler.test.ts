@@ -172,3 +172,69 @@ it("requires authentication headers only when they have actual request evidence"
     "x-gde-csrf-token",
   );
 });
+
+it("preserves captured custom request headers while requiring a dynamic CSRF source", async () => {
+  const { redact } = await import("../../packages/core/src/index");
+  const {
+    interfaceFacts,
+    dataCandidates,
+    parameterizeRecordedInputs,
+    validatePlanData,
+  } = await import("../../packages/planner/src/evidence");
+  const f = intentFixture();
+  const originalHeaders = {
+    "x-adc-page-token": "original-page-token-1234567890123456",
+    "x-adc-page-timestamp": "1793059200000",
+    "x-custom-token": "original-custom-token",
+    "x-gde-csrf-token": "csrf-secret-value",
+  };
+  f.recording.requests[0].headers = originalHeaders;
+  f.recording.requests[0].response = {
+    ...(f.recording.requests[0].response as object),
+    csrf_token: "csrf-secret-value",
+  };
+  f.recording = redact(f.recording);
+  f.context.recording = f.recording;
+  expect(f.recording.requests[0].headers).toEqual({
+    ...originalHeaders,
+    "x-gde-csrf-token": "[REDACTED]",
+  });
+  expect(f.recording.requests[0].response).toMatchObject({
+    csrf_token: "[REDACTED]",
+  });
+  f.catalog = f.assets.map((asset) => interfaceFacts(f.recording, asset));
+  f.context.catalog = f.catalog;
+  expect(
+    preflightHeaders(f.catalog, {}, [], f.recording).map((i) => i.message),
+  ).toEqual(["认证 Header x-gde-csrf-token 缺少前置 UI 提取及 Header 绑定"]);
+  const authHeaders = {
+    "x-gde-csrf-token": { source: "AUTH_CONTEXT", name: "csrf" },
+  } as const;
+  expect(
+    preflightHeaders(f.catalog, authHeaders, ["csrf"], f.recording),
+  ).toEqual([]);
+  const compiled = compileCallIntent(f.intent, { ...f.context, authHeaders });
+  expect(compiled.issues).toEqual([]);
+  const candidates = dataCandidates(f.recording, f.catalog);
+  const plan = parameterizeRecordedInputs(compiled.plan, candidates, {
+    recording: f.recording,
+    catalog: f.catalog,
+  });
+  const values = validatePlanData(plan, candidates);
+  for (const name of [
+    "x-adc-page-token",
+    "x-adc-page-timestamp",
+    "x-custom-token",
+  ]) {
+    const binding = plan.steps[0].headers[name];
+    expect(binding.source).toBe("TEST_DATA");
+    if (binding.source === "TEST_DATA")
+      expect(values[binding.name]).toBe(
+        originalHeaders[name as keyof typeof originalHeaders],
+      );
+  }
+  expect(plan.steps[0].headers["x-gde-csrf-token"]).toBeUndefined();
+  expect(
+    validate(f.testCase, plan, f.assets, f.context.environment),
+  ).not.toContain("Static credentials forbidden");
+});

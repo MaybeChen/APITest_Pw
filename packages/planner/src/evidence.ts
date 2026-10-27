@@ -13,6 +13,7 @@ import {
   atPath,
   setAtPath,
   observedHeaderBinding,
+  isCapturedCustomHeader,
 } from "../../core/src/index.js";
 import {
   estimateTokens,
@@ -209,8 +210,9 @@ export function dataCandidates(
   ) => {
     if (
       value === undefined ||
-      JSON.stringify(redact(value, location === "HEADER" ? path : "")) !==
-        JSON.stringify(value) ||
+      JSON.stringify(
+        redact(value, location === "HEADER" ? path : "", location === "HEADER"),
+      ) !== JSON.stringify(value) ||
       /\[(?:REDACTED|REQUEST BODY LIMIT|NON-JSON[^\]]*|[^\]]*OMITTED[^\]]*)\]/.test(
         JSON.stringify(value),
       )
@@ -252,7 +254,7 @@ export function dataCandidates(
           add(item, request.id, "BODY", `$.${key}`, value);
     for (const name of Object.keys(item.customHeaders))
       if (
-        !credential.test(name) &&
+        (!credential.test(name) || isCapturedCustomHeader(name)) &&
         ["STATIC", "MANUAL_REVIEW"].includes(item.asset.headers[name]?.source)
       )
         add(item, request.id, "HEADER", name, request.headers[name]);
@@ -434,7 +436,8 @@ export function parameterizeRecordedInputs(
           }
           if (
             value === undefined ||
-            JSON.stringify(redact(value, path)) !== JSON.stringify(value) ||
+            JSON.stringify(redact(value, path, location === "HEADER")) !==
+              JSON.stringify(value) ||
             /\[(?:REDACTED|REQUEST BODY LIMIT|NON-JSON[^\]]*|[^\]]*OMITTED[^\]]*)\]/.test(
               JSON.stringify(value),
             )

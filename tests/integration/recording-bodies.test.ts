@@ -2,6 +2,7 @@ import { it, expect } from "vitest";
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
 import { Recorder } from "../../packages/recorder/src/index";
+import { Store } from "../../packages/storage/src/index";
 import { demoEnv } from "../../apps/server/src/demo";
 it("captures bounded JSON once per response and explains missing, empty and oversized bodies", async () => {
   const paths = [
@@ -19,7 +20,7 @@ it("captures bounded JSON once per response and explains missing, empty and over
   const server = createServer((req, res) => {
     req.resume();
     if (req.url === "/") {
-      const body = `<html><body><script>Promise.all(${JSON.stringify(paths)}.map(path=>fetch(path,(path.includes('/api/json')||path.includes('/api/chunked-post'))?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:'do-not-store-this-password',topic:'all'})}:{}).then(response=>response.arrayBuffer()))).then(()=>document.body.dataset.done='true')</script></body></html>`;
+      const body = `<html><body><script>Promise.all(${JSON.stringify(paths)}.map(path=>fetch(path,(path.includes('/api/json')||path.includes('/api/chunked-post'))?{method:'POST',headers:{'content-type':'application/json','x-adc-page-token':'captured-page-token','x-adc-page-timestamp':'1793059200000','x-gde-csrf-token':'do-not-store-this-csrf'},body:JSON.stringify({password:'do-not-store-this-password',topic:'all'})}:{}).then(response=>response.arrayBuffer()))).then(()=>document.body.dataset.done='true')</script></body></html>`;
       res.writeHead(200, {
         "content-type": "text/html",
         "content-length": Buffer.byteLength(body),
@@ -95,6 +96,27 @@ it("captures bounded JSON once per response and explains missing, empty and over
       topic: "all",
     });
     expect(byPath("/api/json").query.topic).toBe("all");
+    expect(byPath("/api/json").headers).toMatchObject({
+      "x-adc-page-token": "captured-page-token",
+      "x-adc-page-timestamp": "1793059200000",
+      "x-gde-csrf-token": "[REDACTED]",
+    });
+    const store = new Store("file::memory:");
+    try {
+      await store.init();
+      await store.put("recording", recording.id, 1, recording);
+      const saved = await store.get<typeof recording>(
+        "recording",
+        recording.id,
+      );
+      expect(
+        saved?.requests.find((r) => new URL(r.url).pathname === "/api/json")
+          ?.headers,
+      ).toMatchObject(byPath("/api/json").headers);
+    } finally {
+      store.client.close();
+    }
+
     expect(byPath("/api/empty").responseBodyCapture?.state).toBe("EMPTY");
     for (const path of ["/api/chunked", "/api/chunked-post"]) {
       expect(byPath(path).responseBodyCapture?.state).toBe("CAPTURED");

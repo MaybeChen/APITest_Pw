@@ -14,7 +14,13 @@ import {
 } from "../../contracts/src/index.js";
 const sensitive =
   /password|passwd|secret|cookie|authorization|token|csrf|signature|credit.?card|cardnumber|cvv|api.?key/i;
-export function redact(value: unknown, key = ""): any {
+// Custom request headers are captured literals unless they carry CSRF.
+// This policy does not apply to response bodies, cookies or Authorization.
+export function isCapturedCustomHeader(name: string) {
+  return /^x-/i.test(name) && !/csrf/i.test(name);
+}
+export function redact(value: unknown, key = "", requestHeader = false): any {
+  if (requestHeader && isCapturedCustomHeader(key)) return value;
   if (sensitive.test(key)) {
     if (
       value &&
@@ -36,7 +42,10 @@ export function redact(value: unknown, key = ""): any {
   if (Array.isArray(value)) return value.map((v) => redact(v));
   if (value && typeof value === "object")
     return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, redact(v, k)]),
+      Object.entries(value).map(([k, v]) => [
+        k,
+        redact(v, k, key === "headers"),
+      ]),
     );
   if (typeof value === "string") {
     if (key === "prefix" && value === "Bearer ") return value;
@@ -61,8 +70,8 @@ export function observedHeaderBinding(name: string, value: string): Binding {
   )
     return { source: "CLIENT_MANAGED" };
   if (
-    sensitive.test(name) ||
-    redact(value, name) !== value ||
+    (!isCapturedCustomHeader(name) && sensitive.test(name)) ||
+    redact(value, name, true) !== value ||
     value.includes("[REDACTED]")
   )
     return { source: "MANUAL_REVIEW" };
@@ -455,7 +464,11 @@ export function validate(
           );
       }
     for (const [name, b] of Object.entries(s.headers)) {
-      if (sensitive.test(name) && b.source === "STATIC")
+      if (
+        !isCapturedCustomHeader(name) &&
+        sensitive.test(name) &&
+        b.source === "STATIC"
+      )
         errors.push("Static credentials forbidden");
       if (
         ["host", "content-length", "cookie"].includes(name.toLowerCase()) &&
