@@ -119,9 +119,9 @@ export function UIFlowRecorder({
         认证协议。接口执行前回放操作，并共享浏览器 Cookie。
       </p>
       <p>
-        填写动作仅记录元素定位和 UI_INPUT_1
-        等环境变量名，不采集输入值。请在后端配置对应变量，或在动作 JSON 中调整
-        secretRef。支持主页面点击、文本填写、下拉选择和 Enter 提交。暂不支持
+        填写和下拉选择会保存实际输入值，回放时直接使用，无需配置 UI_INPUT
+        环境变量。 可在动作 JSON 中修改 value；旧动作需将 secretRef 替换为
+        value。 支持主页面点击、文本填写、下拉选择和 Enter 提交，暂不支持
         iframe、弹窗新页及复杂拖拽。
       </p>
       {error && (
@@ -187,7 +187,7 @@ export function UIFlowRecorder({
               );
               setHistory(await api<Snapshot[]>("/ui-recordings"));
               setNotice(
-                "录制已保存。请审核动作、配置输入变量，并填写登录成功后的就绪元素。",
+                "录制已保存，填写值已记录。请审核动作并填写登录成功后的就绪元素。",
               );
             })
           }

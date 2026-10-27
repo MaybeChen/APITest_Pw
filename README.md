@@ -22,7 +22,7 @@ pnpm web      # 前端 :5173
 
 默认录制启动可见 Chromium。需要桌面显示环境（Linux DISPLAY）；当前云环境没有桌面，设置 `RECORDER_HEADLESS=true` 可做自动录制集成验证，但不能在云页面中直接操纵该浏览器。桌面机器启动后，在录制页输入场景，开始录制，在弹出的浏览器里正常操作，再停止并分析。
 
-在“环境配置”中添加站点 origin 和 UI AuthProfile；所有导航及 API URL 必须属于显式允许的环境。新建录制选择对应环境；生成后将 Plan 的 `authProfileRef` 设为对应协议。密码只使用 `secretRef`，在启动后端的环境变量中提供值。不要在 JSON 中填入密码或 Token。
+在“环境配置”中添加站点 origin 和 UI AuthProfile；所有导航及 API URL 必须属于显式允许的环境。新建录制选择对应环境；生成后将 Plan 的 `authProfileRef` 设为对应协议。前置 UI 录制会将填写和下拉选择的实际值保存为动作 `value`，回放直接使用，不需要配置 `UI_INPUT_*` 环境变量。动作 JSON 可编辑；旧动作可删除 `secretRef` 并填写 `value`，也可以继续使用 `secretRef` 引用后端环境变量。CSRF 等动态认证来源仍通过前置接口提取，不写成固定 Token。
 
 AuthProfile 支持 navigate/click/fill/waitForURL/waitForSelector/assertVisible，`readySelector` 为必填。人工 MFA 可在可见浏览器中完成，受默认 Playwright 超时限制。localStorage Token 必须显式配置 `tokenSources` 和 `AUTH_CONTEXT` Header；例如 Token source 可指定 `prefix: "Bearer "`。不执行浏览器 Axios 拦截器或任意生成代码。
 

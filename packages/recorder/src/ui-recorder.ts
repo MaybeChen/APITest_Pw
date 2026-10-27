@@ -81,7 +81,6 @@ export class UIRecorder {
         .finally(() => this.pending.delete(pending));
       this.pending.add(pending);
     });
-    let inputIndex = 0;
     await this.context.exposeBinding("__uiRecord", (source, event: unknown) => {
       if (
         this.state !== "RECORDING" ||
@@ -96,16 +95,18 @@ export class UIRecorder {
       )
         return;
       const next = parsed.data;
-      // Never accept field values from the browser. Inputs are environment references.
+      // Persist literal inputs so this flow can replay without server environment variables.
       if (next.type === "fill" || next.type === "selectOption") {
-        const previous = this.actions.at(-1);
-        if (previous?.type === next.type && previous.target === next.target)
-          return;
-        this.actions.push({
+        if (next.value === undefined) return;
+        const captured = {
           type: next.type,
           target: next.target,
-          secretRef: `UI_INPUT_${++inputIndex}`,
-        });
+          value: next.value,
+        };
+        const previous = this.actions.at(-1);
+        if (previous?.type === next.type && previous.target === next.target)
+          this.actions[this.actions.length - 1] = captured;
+        else this.actions.push(captured);
       } else if (next.type === "press") {
         if (next.value === "Enter")
           this.actions.push({

@@ -53,7 +53,13 @@
           "input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=button]):not([type=submit]),textarea,[contenteditable=true]",
         )
       )
-        send({ type: "fill", target: selector(element) });
+        send({
+          type: "fill",
+          target: selector(element),
+          value: element.isContentEditable
+            ? (element.textContent ?? "")
+            : element.value,
+        });
     },
     true,
   );
@@ -61,7 +67,11 @@
     "change",
     (event) => {
       if (event.target instanceof HTMLSelectElement)
-        send({ type: "selectOption", target: selector(event.target) });
+        send({
+          type: "selectOption",
+          target: selector(event.target),
+          value: event.target.value,
+        });
     },
     true,
   );

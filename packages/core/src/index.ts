@@ -326,11 +326,13 @@ export function validate(
     errors.push("Environment reference mismatch");
   for (const action of p.uiActions)
     if (
-      action.type === "fill" &&
-      /password|token|secret/i.test(action.target) &&
-      !action.secretRef
+      ["fill", "selectOption"].includes(action.type) &&
+      !action.secretRef &&
+      action.value === undefined
     )
-      errors.push("Sensitive UI input requires secret reference");
+      errors.push(
+        `UI input requires a value or secret reference: ${action.target}`,
+      );
   const byId = new Map(p.steps.map((s) => [s.id, s]));
   function ancestors(id: string, seen = new Set<string>()): Set<string> {
     if (seen.has(id)) return seen;

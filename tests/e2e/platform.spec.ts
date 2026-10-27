@@ -1024,7 +1024,7 @@ test("records, reviews and saves a reusable precondition UI profile from configu
     snapshot.actions.push({
       type: "fill",
       target: "#password",
-      secretRef: "UI_INPUT_1",
+      value: "recorded-password",
     });
     await route.fulfill({ json: snapshot });
   });
@@ -1049,7 +1049,9 @@ test("records, reviews and saves a reusable precondition UI profile from configu
   await page
     .getByRole("button", { name: "停止前置 UI 录制", exact: true })
     .click();
-  await expect(page.getByLabel("前置 UI 动作 JSON")).toHaveValue(/UI_INPUT_1/);
+  await expect(page.getByLabel("前置 UI 动作 JSON")).toHaveValue(
+    /recorded-password/,
+  );
   await expect(
     page.getByRole("cell", { name: "前置接口响应", exact: true }),
   ).toBeVisible();
@@ -1087,7 +1089,7 @@ test("records, reviews and saves a reusable precondition UI profile from configu
   expect(saved.actions[1]).toEqual({
     type: "fill",
     target: "#password",
-    secretRef: "UI_INPUT_1",
+    value: "recorded-password",
   });
 });
 

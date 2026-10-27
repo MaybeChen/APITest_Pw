@@ -9,14 +9,16 @@ import { Store } from "../../packages/storage/src/index";
 import { MockAIProvider } from "../../packages/planner/src/index";
 import type { Environment } from "../../packages/contracts/src/index";
 
-it("records UI actions without input values, persists history, and replays a cookie-authenticated API session", async () => {
+it("records literal UI inputs, persists the profile, and replays without input environment variables", async () => {
+  const submitted: URLSearchParams[] = [];
   const server = createServer((req, res) => {
     if (req.url === "/login") {
       res.setHeader("content-type", "text/html");
       res.end(
-        '<form action="/done"><input id="user"><input id="password" type="password"><select id="tenant"><option value="a">A</option><option value="b">B</option></select><button id="login">登录</button></form>',
+        '<form action="/done"><input id="user" name="user"><input id="password" name="password" type="password"><select id="tenant" name="tenant"><option value="a">A</option><option value="b">B</option></select><button id="login">登录</button></form>',
       );
     } else if (req.url?.startsWith("/done")) {
+      submitted.push(new URL(req.url, "http://localhost").searchParams);
       res.setHeader("set-cookie", [
         "session=ui-session; HttpOnly; Path=/",
         "csrf-cookie=private-csrf-value; HttpOnly; Path=/",
@@ -84,6 +86,7 @@ it("records UI actions without input values, persists history, and replays a coo
     rec = new UIRecorder(env, baseURL + "/login");
     await rec.start(true);
     const page = rec.context!.pages()[0];
+    await page.locator("#user").fill("wrong-value");
     await page.locator("#user").fill("private-user");
     await page.locator("#password").fill("private-password");
     await page.locator("#tenant").selectOption("b");
@@ -95,16 +98,22 @@ it("records UI actions without input values, persists history, and replays a coo
     await expect.poll(() => rec!.authHints.length).toBe(3);
     const snapshot = await rec.stop();
     expect(JSON.stringify(snapshot)).not.toMatch(
-      /private-user|private-password|private-csrf-value|private-local-token|private-session-token/,
+      /private-csrf-value|private-local-token|private-session-token/,
     );
     expect(snapshot.actions.filter((a) => a.type === "fill")).toHaveLength(2);
-    expect(
-      snapshot.actions.find((a) => a.type === "selectOption")?.secretRef,
-    ).toBe("UI_INPUT_3");
+    expect(snapshot.actions.find((a) => a.type === "selectOption")?.value).toBe(
+      "b",
+    );
     expect(snapshot.actions.filter((a) => a.type === "click")).toHaveLength(0);
-    vi.stubEnv("UI_INPUT_1", "replay-user");
-    vi.stubEnv("UI_INPUT_2", "replay-password");
-    vi.stubEnv("UI_INPUT_3", "b");
+    expect(snapshot.actions.find((a) => a.target === "#user")?.value).toBe(
+      "private-user",
+    );
+    expect(snapshot.actions.find((a) => a.target === "#password")?.value).toBe(
+      "private-password",
+    );
+    expect(snapshot.actions.every((a) => !a.secretRef)).toBe(true);
+    vi.stubEnv("UI_INPUT_1", undefined);
+    vi.stubEnv("UI_INPUT_2", undefined);
     const profile = applyAuthHints(
       {
         id: "recorded-auth",
@@ -133,6 +142,10 @@ it("records UI actions without input values, persists history, and replays a coo
     });
     expect(saved.statusCode, saved.body).toBe(200);
     expect(saved.json().recordingRef).toBe(rec.id);
+    const persisted = (await app.inject("/api/auth-profiles"))
+      .json()
+      .find((p: { id: string }) => p.id === profile.id);
+    expect(persisted.actions).toEqual(snapshot.actions);
     const replay = new UIRecorder(env, baseURL + "/login");
     try {
       await replay.start(true);
@@ -145,6 +158,14 @@ it("records UI actions without input values, persists history, and replays a coo
         profile,
         env,
       );
+      expect(await replay.context!.pages()[0].locator("#ready").count()).toBe(
+        1,
+      );
+      expect(Object.fromEntries(submitted.at(-1)!)).toEqual({
+        user: "private-user",
+        password: "private-password",
+        tenant: "b",
+      });
       expect(extracted.recorded_x_gde_csrf_token).toBe("private-csrf-value");
       expect(extracted.recorded_x_page_token).toBe("private-session-token");
       expect(extracted.recorded_authorization).toBe(

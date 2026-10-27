@@ -122,13 +122,13 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
         throw new Error(
           `Header ${name} 引用了未配置的认证变量 ${binding.name}`,
         );
-    for (const a of data.actions)
+    for (const input of data.actions)
       if (
-        a.type === "fill" &&
-        a.value !== undefined &&
-        /password|token|secret/i.test(a.target)
+        ["fill", "selectOption"].includes(input.type) &&
+        !input.secretRef &&
+        input.value === undefined
       )
-        throw new Error("Sensitive input must use secretRef");
+        throw new Error(`前置 UI 输入缺少 value：${input.target}`);
     for (const [k, v] of Object.entries(data.headers))
       if (
         /authorization|token|csrf|cookie|secret/i.test(k) &&
