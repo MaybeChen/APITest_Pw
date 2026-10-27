@@ -422,7 +422,7 @@ export class ModelAIProvider implements AIProvider {
         res = await (this.config.requester ?? fetch)(this.config.endpoint, {
           method: "POST",
           redirect: "manual",
-          signal: AbortSignal.timeout(this.config.timeoutMs ?? 30000),
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 600000),
           headers: {
             "content-type": "application/json",
             ...(this.config.apiKey

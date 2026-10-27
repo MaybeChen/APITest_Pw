@@ -29,7 +29,7 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
         );
       }, "Model baseURL must be an HTTP/HTTPS URL without credentials, query or fragment"),
     model: z.string().trim().min(1),
-    timeoutMs: z.number().int().min(100).max(300000).default(60000),
+    timeoutMs: z.number().int().min(100).max(600000).default(600000),
     responseFormat: z.enum(["json_object", "none"]).default("json_object"),
     apiKeyEnv: z.string().min(1).optional(),
     caFile: z.string().min(1).optional(),

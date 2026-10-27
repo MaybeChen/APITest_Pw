@@ -151,7 +151,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
   "provider": "openai-compatible",
   "baseURL": "https://tpsp.dev.huawei.com/llm/qwen3.6/v1",
   "model": "qwen",
-  "timeoutMs": 60000,
+  "timeoutMs": 600000,
   "responseFormat": "json_object"
 }
 ```
