@@ -473,3 +473,37 @@ it("normalizes absent model assertion data references without weakening plan val
     taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
   ).toThrow();
 });
+
+it("normalizes null model bodies in plan and repair while preserving explicit body bindings", async () => {
+  const { normalizeTaskOutput, taskSchemas } =
+    await import("../../packages/planner/src/pipeline-contracts");
+  const raw = structuredClone(demoArtifacts().plan);
+  (raw.steps[0] as any).body = null;
+  expect(() => planSchema.parse(raw)).toThrow();
+  const normalized = taskSchemas.PLAN_DESIGN.parse(
+    normalizeTaskOutput("PLAN_DESIGN", raw),
+  );
+  expect(normalized.steps[0]).not.toHaveProperty("body");
+  expect(raw.steps[0].body).toBeNull();
+  const repair = taskSchemas.PLAN_REPAIR.parse(
+    normalizeTaskOutput("PLAN_REPAIR", {
+      replacements: [raw.steps[0]],
+      reason: "修复",
+    }),
+  );
+  expect(repair.replacements[0]).not.toHaveProperty("body");
+  for (const binding of [
+    { source: "STATIC", value: null },
+    { source: "TEST_DATA", name: "request_body" },
+  ]) {
+    (raw.steps[0] as any).body = binding;
+    expect(
+      taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw))
+        .steps[0].body,
+    ).toEqual(binding);
+  }
+  (raw.steps[0] as any).body = "invalid";
+  expect(() =>
+    taskSchemas.PLAN_DESIGN.parse(normalizeTaskOutput("PLAN_DESIGN", raw)),
+  ).toThrow();
+});
