@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { observedSchema } from "../../recorder/src/index.js";
 import type {
@@ -6,7 +7,7 @@ import type {
   Binding,
   Plan,
 } from "../../contracts/src/index.js";
-import { redact, valueKind } from "../../core/src/index.js";
+import { redact, valueKind, atPath, setAtPath } from "../../core/src/index.js";
 import {
   estimateTokens,
   taskMessages,
@@ -343,6 +344,7 @@ export function applyRecordedHeaders(
 export function parameterizeRecordedInputs(
   plan: Plan,
   candidates: DataCandidate[],
+  evidence?: { recording: Recording; catalog: CatalogInterface[] },
 ): Plan {
   const result = structuredClone(plan);
   result.parameters ??= {};
@@ -352,15 +354,77 @@ export function parameterizeRecordedInputs(
       location: DataCandidate["location"],
       path: string,
     ): Binding | undefined => {
-      if (binding?.source !== "STATIC" || binding.value === undefined)
+      if (!binding || !["STATIC", "TEST_DATA"].includes(binding.source))
         return binding;
-      const candidate = candidates.find(
+      if (
+        binding.source === "TEST_DATA" &&
+        candidates.some((c) => c.name === binding.name)
+      )
+        return binding;
+      let candidate = candidates.find(
         (c) =>
           c.apiId === step.apiId &&
           c.location === location &&
           c.path === path &&
+          binding.source === "STATIC" &&
           isDeepStrictEqual(c.value, binding.value),
       );
+      // The model sees compact samples. Search full local evidence only for the
+      // exact requested field, rather than expanding every request into tokens.
+      if (!candidate && evidence) {
+        const item = evidence.catalog.find((item) => item.apiId === step.apiId);
+        for (const request of evidence.recording.requests) {
+          if (!item?.asset.sources.includes(request.id)) continue;
+          let value: unknown;
+          try {
+            if (location === "BODY") {
+              setAtPath(undefined, path, null); // Same safe path grammar as runner.
+              value = atPath(request.body, path);
+            } else if (location === "QUERY") value = request.query[path];
+            else if (location === "PATH") {
+              const segments = item.asset.pathTemplate.split("/");
+              const index = segments.indexOf(`{${path}}`);
+              if (index >= 0)
+                value = decodeURIComponent(
+                  new URL(request.url).pathname.split("/")[index] ?? "",
+                );
+            }
+          } catch {
+            continue;
+          }
+          if (
+            value === undefined ||
+            JSON.stringify(redact(value, path)) !== JSON.stringify(value) ||
+            /\[(?:REDACTED|REQUEST BODY LIMIT|NON-JSON[^\]]*|[^\]]*OMITTED[^\]]*)\]/.test(
+              JSON.stringify(value),
+            )
+          )
+            continue;
+          const name = `data_ref_${createHash("sha256")
+            .update(JSON.stringify([step.apiId, request.id, location, path]))
+            .digest("hex")
+            .slice(0, 24)}`;
+          if (
+            binding.source === "STATIC"
+              ? !isDeepStrictEqual(value, binding.value)
+              : binding.source !== "TEST_DATA" || binding.name !== name
+          )
+            continue;
+          const type = valueKind(value);
+          if (type === "undefined") continue;
+          candidate = {
+            name,
+            apiId: step.apiId,
+            location,
+            path,
+            requestId: request.id,
+            type,
+            value: structuredClone(value),
+          };
+          candidates.push(candidate);
+          break;
+        }
+      }
       if (!candidate) return binding;
       result.parameters![candidate.name] = candidate.type;
       return { source: "TEST_DATA", name: candidate.name };

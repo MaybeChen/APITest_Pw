@@ -763,3 +763,79 @@ it("finishes plan generation when a model inlines an unchanged recorded request 
   });
   expect(calls.filter((c) => c.task === "PLAN_DESIGN")).toHaveLength(1);
 });
+
+it("recovers omitted fields from full local recording evidence without enlarging model input", async () => {
+  const { parameterizeRecordedInputs } =
+    await import("../../packages/planner/src/evidence");
+  const captured = structuredClone(recording);
+  captured.requests[0].body = Object.fromEntries(
+    Array.from({ length: 30 }, (_, i) => [`field_${i}`, i]),
+  );
+  Object.assign(captured.requests[0].body as object, {
+    placeholder_key: "first",
+    items: [{ key: "nested" }],
+    password: "[REDACTED]",
+  });
+  captured.requests.push({
+    ...structuredClone(captured.requests[0]),
+    id: "second-request",
+    body: { placeholder_key: "second" },
+  });
+  const { model } = provider();
+  const job = createPipeline(
+    { recording: captured, assets: [], environment: demoEnv },
+    model,
+  );
+  const candidates = dataCandidates(job.input.recording, job.catalog!);
+  expect(candidates.some((c) => c.path === "$.placeholder_key")).toBe(false);
+  const originalCount = candidates.length;
+  const plan = structuredClone(demoArtifacts().plan);
+  plan.parameters = {};
+  plan.steps = [plan.steps[0]];
+  plan.steps[0].apiId = job.catalog![0].apiId;
+  plan.steps[0].body = { source: "STATIC", value: {} };
+  plan.steps[0].bodyBindings = {
+    "$.placeholder_key": { source: "STATIC", value: "second" },
+    "$.items[0].key": { source: "STATIC", value: "nested" },
+  };
+  const evidence = { recording: job.input.recording, catalog: job.catalog! };
+  const normalized = parameterizeRecordedInputs(plan, candidates, evidence);
+  expect(Object.values(validatePlanData(normalized, candidates))).toEqual([
+    "second",
+    "nested",
+  ]);
+  expect(candidates.length).toBe(originalCount + 2);
+  expect(
+    candidates.find((c) => c.path === "$.placeholder_key")?.requestId,
+  ).toBe("second-request");
+  // Resume reconstructs the same names and values from the saved references.
+  const restoredCandidates = dataCandidates(job.input.recording, job.catalog!);
+  const restored = parameterizeRecordedInputs(
+    normalized,
+    restoredCandidates,
+    evidence,
+  );
+  expect(validatePlanData(restored, restoredCandidates)).toEqual(
+    validatePlanData(normalized, candidates),
+  );
+  plan.steps[0].bodyBindings = {
+    "$.placeholder_key": { source: "STATIC", value: "invented" },
+  };
+  expect(() =>
+    validatePlanData(
+      parameterizeRecordedInputs(
+        plan,
+        dataCandidates(job.input.recording, job.catalog!),
+        evidence,
+      ),
+      candidates,
+    ),
+  ).toThrow("placeholder_key");
+  plan.steps[0].bodyBindings = {
+    "$.password": { source: "STATIC", value: "[REDACTED]" },
+  };
+  const safe = dataCandidates(job.input.recording, job.catalog!);
+  expect(() =>
+    validatePlanData(parameterizeRecordedInputs(plan, safe, evidence), safe),
+  ).toThrow("password");
+});

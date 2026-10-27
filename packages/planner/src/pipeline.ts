@@ -553,6 +553,7 @@ export async function executePipeline(
           job.authContract?.headers,
         ),
         candidates,
+        { recording: job.input.recording, catalog: selected },
       );
     job.plan = await run("PLAN_DESIGN", async () =>
       normalize(
@@ -592,6 +593,8 @@ export async function executePipeline(
         ),
       ),
     );
+    // Rehydrate on-demand data references when resuming a saved plan stage.
+    job.plan = normalize(job.plan);
     const inspect = () => {
       const errors = validate(
         job.testCase!,
