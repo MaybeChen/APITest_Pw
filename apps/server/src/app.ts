@@ -233,10 +233,17 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   app.get("/api/plans", async () => store.list<Plan>("plan"));
   app.get("/api/assets", async () => store.list<Asset>("asset"));
   app.get("/api/reports", async () => store.list<Report>("report"));
-  app.get("/api/recordings", async () => [
-    ...(await store.list<Recording>("recording")),
-    ...Array.from(sessions.values()).map((s) => s.recording),
-  ]);
+  app.get("/api/recordings", async () => {
+    const deleted = new Set(
+      (await store.list<{ id: string }>("recording-deletion")).map((r) => r.id),
+    );
+    return [
+      ...(await store.list<Recording>("recording")).filter(
+        (r) => !deleted.has(r.id),
+      ),
+      ...Array.from(sessions.values()).map((s) => s.recording),
+    ];
+  });
   app.post("/api/recordings", async (req) => {
     if (sessions.size >= 2) throw new Error("Recording capacity reached");
     const b = z
@@ -400,6 +407,44 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     },
   );
   const generationActions = new Set<string>();
+  const deletingRecordings = new Set<string>();
+  app.delete<{ Params: { id: string } }>(
+    "/api/recordings/:id",
+    async (req, reply) => {
+      const { id } = req.params;
+      if (sessions.has(id))
+        return reply
+          .code(409)
+          .send({ error: "请先停止录制，再删除历史记录。" });
+      if (deletingRecordings.has(id))
+        return reply.code(409).send({ error: "正在删除此记录，请稍后刷新。" });
+      deletingRecordings.add(id);
+      try {
+        if (!(await store.get("recording", id)))
+          return reply.code(404).send({ error: "录制记录不存在" });
+        const jobs = (await store.latest<Generation>("generation")).filter(
+          (job) => job.input.recording.id === id,
+        );
+        if (
+          jobs.some(
+            (job) =>
+              activeGenerations.has(job.id) || generationActions.has(job.id),
+          )
+        )
+          return reply
+            .code(409)
+            .send({ error: "此记录正在生成，请等待任务结束后再删除。" });
+        if (!(await store.get("recording-deletion", id)))
+          await store.put("recording-deletion", id, 1, {
+            id,
+            deletedAt: Date.now(),
+          });
+        return reply.code(204).send();
+      } finally {
+        deletingRecordings.delete(id);
+      }
+    },
+  );
   for (const action of [
     "interfaces",
     "case",

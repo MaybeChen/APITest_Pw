@@ -1230,3 +1230,54 @@ test("keeps confirmed case while prerequisite configuration is missing and switc
     page.getByRole("button", { name: "重新生成计划", exact: true }),
   ).toBeDisabled();
 });
+
+test("deletes a history entry only after confirmation and keeps it absent after reload", async ({
+  page,
+}) => {
+  let deleted = false;
+  let deletes = 0;
+  await page.route("**/api/recordings", async (route) => {
+    await route.fulfill({
+      json: deleted
+        ? []
+        : [
+            {
+              id: "history-delete",
+              caseName: "待删除录制",
+              scenario: "历史删除验证",
+              target: "http://127.0.0.1:3100",
+              state: "STOPPED",
+              startedAt: Date.now(),
+              requests: [],
+              operations: [],
+            },
+          ],
+    });
+  });
+  await page.route("**/api/recordings/history-delete", async (route) => {
+    expect(route.request().method()).toBe("DELETE");
+    deletes++;
+    deleted = true;
+    await route.fulfill({ status: 204 });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
+  const remove = page.getByRole("button", {
+    name: "删除历史记录 待删除录制",
+    exact: true,
+  });
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await remove.click();
+  await expect(remove).toBeVisible();
+  expect(deletes).toBe(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await remove.click();
+  await expect(
+    page.getByText("历史记录已删除。", { exact: true }),
+  ).toBeVisible();
+  await expect(remove).toHaveCount(0);
+  expect(deletes).toBe(1);
+  await page.reload();
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
+  await expect(remove).toHaveCount(0);
+});

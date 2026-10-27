@@ -7,13 +7,15 @@ export function RecordingHistory({
   approvedCaseIds,
   busy,
   onOpen,
+  onDelete,
 }: {
   recordings: Recording[];
-  generations: Generation[];
+  generations: (Generation & { active?: boolean })[];
   analyzedIds: Set<string>;
   approvedCaseIds: Set<string>;
   busy: boolean;
   onOpen: (recording: Recording) => void;
+  onDelete: (recording: Recording) => void;
 }) {
   return (
     <section>
@@ -86,6 +88,19 @@ export function RecordingHistory({
                           onClick={() => onOpen(recording)}
                         >
                           查看 / 继续
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={
+                            busy ||
+                            recording.state === "RECORDING" ||
+                            jobs.some((j) => j.active === true)
+                          }
+                          aria-label={`删除历史记录 ${recording.caseName}`}
+                          title="删除历史条目，已保存的用例、计划和运行报告仍保留"
+                          onClick={() => onDelete(recording)}
+                        >
+                          删除
                         </button>
                       </td>
                     </tr>

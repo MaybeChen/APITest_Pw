@@ -489,6 +489,23 @@ function App() {
               approvedCaseIds={new Set(cases.map((c) => c.caseId))}
               busy={busy || recording?.state === "RECORDING"}
               onOpen={openRecording}
+              onDelete={(item) => {
+                if (
+                  !window.confirm(
+                    `删除历史记录“${item.caseName}”？删除后不再显示此条记录，已保存的用例、计划和运行报告仍保留。`,
+                  )
+                )
+                  return;
+                void task(async () => {
+                  await api(
+                    `/recordings/${encodeURIComponent(item.id)}`,
+                    undefined,
+                    "DELETE",
+                  );
+                  if (recording?.id === item.id) clearFlow();
+                  setNotice("历史记录已删除。");
+                });
+              }}
             />
             <details>
               <summary>未关联录制的模板与旧用例</summary>{" "}
