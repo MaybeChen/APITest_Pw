@@ -37,6 +37,54 @@ export function Datasets({
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const [notice, setNotice] = useState("");
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [baseline, setBaseline] = useState(candidate);
+  const originLabels = {
+    RECORDING: "录制值",
+    USER: "用户指定",
+    MODEL_SUGGESTED: "模型建议",
+    MISSING: "缺少值",
+  };
+  let editedRows: Dataset["rows"] = [];
+  try {
+    const parsed: unknown = JSON.parse(rows);
+    if (Array.isArray(parsed))
+      editedRows = parsed.filter(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          row.values &&
+          typeof row.values === "object" &&
+          !Array.isArray(row.values),
+      );
+  } catch {
+    /* JSON editor may be incomplete. */
+  }
+  const sources = Object.fromEntries(
+    Object.keys(plan.parameters ?? {}).map((key) => {
+      const unchanged =
+        editedRows.length > 0 &&
+        editedRows.every((row) => {
+          const original =
+            baseline?.rows.find((item) => item.id === row.id) ??
+            baseline?.rows[0];
+          return (
+            original &&
+            Object.hasOwn(row.values ?? {}, key) ===
+              Object.hasOwn(original.values, key) &&
+            JSON.stringify(row.values[key]) ===
+              JSON.stringify(original.values[key])
+          );
+        });
+      const source = unchanged
+        ? (baseline?.review?.sources[key] ??
+          plan.dataRequirements?.[key]?.source ??
+          "USER")
+        : "USER";
+      return [key, source];
+    }),
+  ) as NonNullable<Dataset["review"]>["sources"];
+
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/datasets")
@@ -104,6 +152,7 @@ export function Datasets({
       JSON.stringify([{ id: "row-1", name: "录制数据", values }], null, 2),
     );
     setSelected("");
+    setReviewConfirmed(false);
     onChange(next);
     setNotice(
       "已提取业务参数和 JSON 预期值。请审核流程，并在下面补齐已有参数、添加数据组；批准后保存数据集。",
@@ -123,6 +172,7 @@ export function Datasets({
           planId: plan.planId,
           planVersion: plan.version,
           rows: JSON.parse(rows),
+          review: { confirmed: reviewConfirmed, sources },
         };
         const response = await fetch("/api/datasets", {
           method: "POST",
@@ -172,12 +222,64 @@ export function Datasets({
           .join("，") ||
           "尚未定义；可提取静态业务参数，或在流程 JSON 中配置 parameters 和 TEST_DATA 绑定。"}
       </p>
+      {Object.keys(plan.parameters ?? {}).length > 0 && (
+        <>
+          <h4>参数来源与数据审核</h4>
+          <p>
+            录制值可以复用；模型建议值需要核对场景，缺少值请补齐。修改下方数据组后会标记为用户指定，并需要重新确认。
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>参数</th>
+                <th>类型</th>
+                <th>来源</th>
+                <th>接口字段</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(plan.parameters ?? {}).map(([key, type]) => {
+                const requirement = plan.dataRequirements?.[key];
+                return (
+                  <tr key={key}>
+                    <td>{key}</td>
+                    <td>{type}</td>
+                    <td>
+                      {
+                        originLabels[
+                          (selected
+                            ? available.find(
+                                (d) => `${d.id}:${d.version}` === selected,
+                              )?.review?.sources[key]
+                            : sources[key]) ??
+                            requirement?.source ??
+                            "USER"
+                        ]
+                      }
+                    </td>
+                    <td>
+                      {requirement
+                        ? `${requirement.location} ${requirement.path}`
+                        : "手工参数"}
+                    </td>
+                    <td>{requirement?.note ?? ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
       <label>
         选择数据集
         <select
           value={selected}
           disabled={working}
-          onChange={(e) => setSelected(e.target.value)}
+          onChange={(e) => {
+            setSelected(e.target.value);
+            setReviewConfirmed(false);
+          }}
         >
           <option value="">新建数据集</option>
           {available.map((d) => (
@@ -198,7 +300,10 @@ export function Datasets({
             <textarea
               className="dataset-editor"
               value={rows}
-              onChange={(e) => setRows(e.target.value)}
+              onChange={(e) => {
+                setRows(e.target.value);
+                setReviewConfirmed(false);
+              }}
               spellCheck={false}
             />
           </label>
@@ -218,15 +323,37 @@ export function Datasets({
               const d = available.find(
                 (d) => `${d.id}:${d.version}` === selected,
               )!;
+              setBaseline(d);
               setRows(JSON.stringify(d.rows, null, 2));
               setName(`${d.name} 副本`);
               setSelected("");
+              setReviewConfirmed(false);
             }}
           >
             复制并修改数据
           </button>
         </>
       )}
+      {plan.dataPolicy === "REVIEW_REQUIRED" &&
+        !selected &&
+        Object.keys(plan.parameters ?? {}).length > 0 && (
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={reviewConfirmed}
+              onChange={(e) => setReviewConfirmed(e.target.checked)}
+            />
+            我已核对所有数据组的参数来源、类型和值
+          </label>
+        )}
+      {selected &&
+        plan.dataPolicy === "REVIEW_REQUIRED" &&
+        !available.find((d) => `${d.id}:${d.version}` === selected)?.review
+          ?.confirmed && (
+          <p>
+            此数据集尚未审核。请“复制并修改数据”，核对并确认后保存为新数据集。
+          </p>
+        )}
       {error && (
         <p role="alert" className="error">
           {error}
@@ -241,7 +368,17 @@ export function Datasets({
           保存数据集
         </button>
         <button
-          disabled={busy || working || plan.status !== "APPROVED"}
+          disabled={
+            busy ||
+            working ||
+            plan.status !== "APPROVED" ||
+            (plan.dataPolicy === "REVIEW_REQUIRED" &&
+              Object.keys(plan.parameters ?? {}).length > 0 &&
+              !(selected
+                ? available.find((d) => `${d.id}:${d.version}` === selected)
+                    ?.review?.confirmed
+                : reviewConfirmed))
+          }
           onClick={() => void act(true)}
         >
           {working ? "处理中…" : "执行全部数据组"}

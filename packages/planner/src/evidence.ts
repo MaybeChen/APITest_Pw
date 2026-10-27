@@ -184,8 +184,10 @@ export interface DataCandidate {
   apiId: string;
   location: "PATH" | "QUERY" | "BODY" | "HEADER";
   path: string;
-  requestId: string;
+  requestId?: string;
   value: unknown;
+  source?: "RECORDING" | "USER" | "MODEL_SUGGESTED" | "MISSING";
+  note?: string;
 }
 export function dataCandidates(
   recording: Recording,
@@ -257,8 +259,9 @@ export function validatePlanData(plan: Plan, candidates: DataCandidate[]) {
   for (const [name, type] of Object.entries(plan.parameters ?? {})) {
     const source = known.get(name);
     if (!source || source.type !== type)
-      throw new Error(`测试数据 ${name} 没有匹配的采集来源或类型`);
-    values[name] = structuredClone(source.value);
+      throw new Error(`测试数据 ${name} 没有匹配的候选来源或类型`);
+    if (source.source !== "MISSING")
+      values[name] = structuredClone(source.value);
   }
   const check = (b: Binding | undefined, stepId: string, location: string) => {
     if (
@@ -344,7 +347,11 @@ export function applyRecordedHeaders(
 export function parameterizeRecordedInputs(
   plan: Plan,
   candidates: DataCandidate[],
-  evidence?: { recording: Recording; catalog: CatalogInterface[] },
+  evidence?: {
+    recording: Recording;
+    catalog: CatalogInterface[];
+    allowSuggestions?: boolean;
+  },
 ): Plan {
   const result = structuredClone(plan);
   result.parameters ??= {};
@@ -355,6 +362,17 @@ export function parameterizeRecordedInputs(
       path: string,
     ): Binding | undefined => {
       if (!binding || !["STATIC", "TEST_DATA"].includes(binding.source))
+        return binding;
+      if (
+        binding.source === "STATIC" &&
+        location === "BODY" &&
+        path === "$" &&
+        binding.value &&
+        typeof binding.value === "object" &&
+        !Array.isArray(binding.value) &&
+        Object.keys(binding.value).length === 0 &&
+        Object.keys(step.bodyBindings ?? {}).length
+      )
         return binding;
       if (
         binding.source === "TEST_DATA" &&
@@ -424,6 +442,59 @@ export function parameterizeRecordedInputs(
           candidates.push(candidate);
           break;
         }
+      }
+      if (
+        !candidate &&
+        binding.source === "STATIC" &&
+        binding.value !== undefined &&
+        evidence?.allowSuggestions
+      ) {
+        const type = valueKind(binding.value);
+        if (type !== "undefined") {
+          const name = `data_input_${createHash("sha256")
+            .update(JSON.stringify([step.id, step.apiId, location, path]))
+            .digest("hex")
+            .slice(0, 24)}`;
+          const safe =
+            JSON.stringify(redact(binding.value, path)) ===
+              JSON.stringify(binding.value) &&
+            !/\[(?:REDACTED|REQUEST BODY LIMIT|NON-JSON[^\]]*|[^\]]*OMITTED[^\]]*)\]/.test(
+              JSON.stringify(binding.value),
+            );
+          candidate = {
+            name,
+            apiId: step.apiId,
+            location,
+            path,
+            type,
+            value: safe ? structuredClone(binding.value) : undefined,
+            source: safe ? "MODEL_SUGGESTED" : "MISSING",
+            note: safe
+              ? "模型提出的新测试值，未找到匹配录制证据；请核对场景并确认或修改"
+              : "输入已脱敏或含敏感内容，请人工提供安全测试数据或改用认证/上游绑定",
+          };
+          const prior = candidates.findIndex((c) => c.name === name);
+          if (prior >= 0) candidates[prior] = candidate;
+          else candidates.push(candidate);
+        }
+      }
+      if (
+        !candidate &&
+        binding.source === "TEST_DATA" &&
+        evidence?.allowSuggestions &&
+        result.parameters?.[binding.name]
+      ) {
+        candidate = {
+          name: binding.name,
+          apiId: step.apiId,
+          location,
+          path,
+          type: result.parameters[binding.name],
+          value: undefined,
+          source: "MISSING",
+          note: "引用没有采集来源或候选值，请人工填写",
+        };
+        candidates.push(candidate);
       }
       if (!candidate) return binding;
       result.parameters![candidate.name] = candidate.type;

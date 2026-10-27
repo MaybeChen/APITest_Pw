@@ -477,7 +477,25 @@ export function validate(
 }
 
 // Validate the entire dataset before any browser or request is started.
-export function validateDataset(plan: Plan, dataset: Dataset): void {
+export function validateDataset(
+  plan: Plan,
+  dataset: Dataset,
+  requireReview = false,
+): void {
+  if (
+    requireReview &&
+    plan.dataPolicy === "REVIEW_REQUIRED" &&
+    Object.keys(plan.parameters ?? {}).length
+  ) {
+    if (!dataset.review?.confirmed)
+      throw new Error("测试数据尚未审核确认，请先审核候选值和来源");
+    for (const name of Object.keys(plan.parameters ?? {}))
+      if (
+        !dataset.review.sources[name] ||
+        dataset.review.sources[name] === "MISSING"
+      )
+        throw new Error(`测试数据 ${name} 的来源或值尚未确认`);
+  }
   if (dataset.planId !== plan.planId || dataset.planVersion !== plan.version)
     throw new Error("Dataset plan/version mismatch");
   for (const row of dataset.rows) {

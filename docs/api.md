@@ -282,7 +282,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 2. `POST /api/generations/:id/scenario`：`{revision,scenario}`，复用整理结果重新推荐接口，不重跑第一步。适用于接口确认前。
 3. `POST /api/generations/:id/interfaces`：`{revision,selectedApiIds,scenario,acknowledgeDependencies?:false,confirmed:true}`，确认接口后生成语义用例，进入 `WAITING_CASE_REVIEW`。如果遗漏候选依赖的来源接口，需选择来源接口或明确 `acknowledgeDependencies:true`；此提示不代表采集值匹配已证明业务依赖。
 4. `POST /api/generations/:id/case`：`{revision,testCase,authProfileRef,confirmed:true}`。用户可编辑前置条件、inputRequirements、步骤 title/inputs/expected 和 executionKind（API/UI_PRECONDITION/MANUAL_PRECONDITION），不得改变身份、工作区和版本。确认后才生成调用计划。认证引用必须是已配置的 AuthProfile。
-5. 计划生成、校验及可选局部修复后进入 `NEEDS_REVIEW`。`plan` 为调用 DAG，`datasetCandidate` 为从原始脱敏采集数据提取的独立候选数据集。仍须审核参数、断言、资源清理和资产，再使用既有 `/api/approve` 和 `/api/datasets` 保存。审批不会因进入 NEEDS_REVIEW 而自动通过。
+5. 计划生成、校验及可选局部修复后进入 `NEEDS_REVIEW`。`plan` 为调用 DAG，`datasetCandidate` 为独立候选数据集，包含录制值、模型建议值及缺少值提示；新值不会因缺少录制匹配而直接让计划生成失败。仍须审核参数、断言、资源清理和资产，再使用既有 `/api/approve` 和 `/api/datasets` 保存。审批不会因进入 NEEDS_REVIEW 而自动通过。
 6. `POST /api/generations/:id/fork-scenario`：`{revision,scenario}`。已完成接口整理的非活动任务可复用目录创建另一个场景任务，返回新 `{id}`；原任务不修改，`catalogSourceGenerationId` 记录复用来源，新 Case 身份独立。
 
 模型调用次数通常为“接口整理批次数 + 场景筛选批次数 + 语义用例 1 次 + 调用计划 1 次”，另可能有 1 次局部修复；每个模型批次/阶段最多尝试 2 次。确认等待期间与回放期间不调用模型。目录/样例压缩仅影响模型输入，不能当作执行数据；超过阶段预算会明确报错，请缩小场景或所选接口范围。
@@ -302,3 +302,9 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 录制支持主页面 navigate、click、fill、selectOption、press Enter 和导航后 waitForURL；暂不支持 iframe、新窗口和复杂拖拽。填写及下拉动作只保存 `secretRef: UI_INPUT_1` 等服务端环境变量名，不采集具体值；回放前应配置对应变量，或在审核时调整引用。选择器优先使用唯一 id、data-testid、name、aria-label，最后回退 DOM 位置选择器，需人工审核。导航等待不保存跳转 URL 查询参数和片段。
 
 执行时先回放 AuthProfile.actions，等待 readySelector，再用同一 BrowserContext.request 执行接口调用，共享 Cookie。localStorage 的 Token 仍需配置 tokenSources（逻辑变量名到 storageKey/prefix），并通过 headers 的 AUTH_CONTEXT 绑定；不保存录制时的 Cookie 或 Token 值。额外 Plan.uiActions 执行后会重新提取认证变量。
+
+### 候选测试数据审核
+
+新版生成的 Plan 包含 `dataPolicy:"REVIEW_REQUIRED"`，以及 `dataRequirements`（参数名映射到 `{source,apiId,location,path,requestId?,note?}`）。source 是 RECORDING / USER / MODEL_SUGGESTED / MISSING。模型的新固定值由编译器转成 TEST_DATA，来源为 MODEL_SUGGESTED；没有值的声明引用进入 MISSING。上游响应继续使用 RESPONSE_VARIABLE。缺失或建议值列入 `validation.reviewRequired`，不作为计划生成失败重试的原因。
+
+`datasetCandidate.review` 初始为 `{confirmed:false,sources:{参数名:来源}}`。在数据编辑界面核对各组值，编辑值标为 USER；确认复选框后保存的数据集记录 `confirmed:true`。`POST /api/datasets` 可以保存完整但尚未审核的数据集；`POST /api/run` 和执行器拒绝未审核的新策略数据集，拒绝缺值/错误类型/MISSING 来源。已保存数据集的内容和审核标记均不可覆盖，需复制后重新确认。旧策略计划不强制新增确认标记。

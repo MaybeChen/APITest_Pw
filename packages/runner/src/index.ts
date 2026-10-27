@@ -123,19 +123,25 @@ export async function run(
   env: Environment,
   authProfile: AuthProfile,
   testData: Record<string, unknown> = {},
+  dataReview?: Dataset["review"],
 ): Promise<Report> {
   const errors = validate(c, p, assets, env, true);
   if (errors.length) throw new Error(errors.join("; "));
   if (p.authProfileRef !== authProfile.id)
     throw new Error("Auth profile mismatch");
-  validateDataset(p, {
-    id: "single",
-    name: "single",
-    version: 1,
-    planId: p.planId,
-    planVersion: p.version,
-    rows: [{ id: "single", name: "single", values: testData }],
-  });
+  validateDataset(
+    p,
+    {
+      review: dataReview,
+      id: "single",
+      name: "single",
+      version: 1,
+      planId: p.planId,
+      planVersion: p.version,
+      rows: [{ id: "single", name: "single", values: testData }],
+    },
+    true,
+  );
   const report: Report = {
     semanticSteps: structuredClone(c.steps),
     environmentSnapshot: structuredClone(env),
@@ -403,12 +409,20 @@ export async function runDataset(
   dataset: Dataset,
   save: (report: Report) => Promise<void> = async () => {},
 ): Promise<Report[]> {
-  validateDataset(p, dataset);
+  validateDataset(p, dataset, true);
   const batchId = randomUUID();
   const reports: Report[] = [];
   for (const row of dataset.rows) {
     // Each row uses a fresh browser, auth context, response variables and resource ledger.
-    const report = await run(c, p, assets, env, authProfile, row.values);
+    const report = await run(
+      c,
+      p,
+      assets,
+      env,
+      authProfile,
+      row.values,
+      dataset.review,
+    );
     report.dataset = {
       id: dataset.id,
       version: dataset.version,

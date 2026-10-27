@@ -159,6 +159,7 @@ export function confirmInterfaces(
   delete job.testCase;
   delete job.plan;
   delete job.datasetCandidate;
+  delete job.dataProposals;
   delete job.validation;
   for (const stage of job.stages.filter((s) =>
     [
@@ -212,6 +213,7 @@ export function regeneratePlan(job: Generation) {
   delete job.plan;
   delete job.validation;
   delete job.datasetCandidate;
+  delete job.dataProposals;
   delete job.error;
   const downstream = new Set([
     "PLAN_DESIGN",
@@ -512,6 +514,10 @@ export async function executePipeline(
       return job;
     }
     const candidates = dataCandidates(job.input.recording, selected);
+    for (const proposal of job.dataProposals ?? []) {
+      if (!candidates.some((c) => c.name === proposal.name))
+        candidates.push({ ...proposal, value: proposal.value });
+    }
     const byRequest = new Map(
       selected.flatMap((item) =>
         item.asset.sources.map((id) => [id, item.apiId] as const),
@@ -529,8 +535,8 @@ export async function executePipeline(
         type: d.valueType,
         confirmed: false,
       }));
-    const normalize = (plan: z.infer<typeof planSchema>) =>
-      parameterizeRecordedInputs(
+    const normalize = (plan: z.infer<typeof planSchema>) => {
+      const compiled = parameterizeRecordedInputs(
         applyRecordedHeaders(
           {
             ...plan,
@@ -553,8 +559,48 @@ export async function executePipeline(
           job.authContract?.headers,
         ),
         candidates,
-        { recording: job.input.recording, catalog: selected },
+        {
+          recording: job.input.recording,
+          catalog: selected,
+          allowSuggestions: true,
+        },
       );
+      compiled.dataPolicy = "REVIEW_REQUIRED";
+      compiled.dataRequirements = {};
+      const used = new Set<string>();
+      for (const step of compiled.steps) {
+        for (const binding of [
+          ...Object.values(step.path),
+          ...Object.values(step.query),
+          ...Object.values(step.headers),
+          ...Object.values(step.bodyBindings ?? {}),
+          ...(step.body ? [step.body] : []),
+        ])
+          if (binding.source === "TEST_DATA") used.add(binding.name);
+        for (const assertion of step.assertions)
+          if (assertion.dataRef) used.add(assertion.dataRef);
+      }
+      for (const name of Object.keys(compiled.parameters ?? {})) {
+        if (!used.has(name)) {
+          delete compiled.parameters![name];
+          continue;
+        }
+        const candidate = candidates.find((c) => c.name === name);
+        if (candidate)
+          compiled.dataRequirements[name] = {
+            source: candidate.source ?? "RECORDING",
+            apiId: candidate.apiId,
+            location: candidate.location,
+            path: candidate.path,
+            ...(candidate.requestId ? { requestId: candidate.requestId } : {}),
+            note: candidate.note,
+          };
+      }
+      job.dataProposals = candidates
+        .filter((c) => c.source && c.source !== "RECORDING" && used.has(c.name))
+        .map((c) => ({ ...c, source: c.source! }));
+      return compiled;
+    };
     job.plan = await run("PLAN_DESIGN", async () =>
       normalize(
         await call<z.infer<typeof planSchema>>(
@@ -629,20 +675,43 @@ export async function executePipeline(
         const values = validatePlanData(job.plan!, candidates);
         job.datasetCandidate = {
           id: `${job.id}-data`,
-          name: `${job.input.recording.caseName} · 采集数据`,
+          name: `${job.input.recording.caseName} · 候选测试数据`,
           planId: job.plan!.planId,
           planVersion: job.plan!.version,
           version: 1,
-          rows: [{ id: "recorded", name: "录制样例（需审核）", values }],
+          review: {
+            confirmed: false,
+            sources: Object.fromEntries(
+              Object.entries(job.plan!.dataRequirements ?? {}).map(
+                ([name, requirement]) => [name, requirement.source],
+              ),
+            ),
+          },
+          rows: [{ id: "recorded", name: "候选数据（需审核）", values }],
         };
-        validateDataset(job.plan!, job.datasetCandidate);
+        const missing = Object.keys(job.plan!.parameters ?? {}).filter(
+          (name) => !Object.hasOwn(values, name),
+        );
+        if (!missing.length) validateDataset(job.plan!, job.datasetCandidate);
+        for (const [name, requirement] of Object.entries(
+          job.plan!.dataRequirements ?? {},
+        ))
+          if (
+            requirement.source === "MODEL_SUGGESTED" ||
+            requirement.source === "MISSING"
+          )
+            errors.push(
+              `测试数据待审核：${name}（${requirement.source === "MISSING" ? "缺少值" : "模型建议"}，${requirement.location} ${requirement.path}）`,
+            );
       } catch (error) {
         errors.push(String(error));
       }
       const unique = [...new Set(errors)];
       const reviewRequired = unique.filter(
         (e) =>
-          e.startsWith("Unvalidated API Asset") || e === "Unresolved header",
+          e.startsWith("Unvalidated API Asset") ||
+          e === "Unresolved header" ||
+          e.startsWith("测试数据待审核："),
       );
       return {
         errors: unique,

@@ -95,6 +95,11 @@ it("stores datasets independently, preserves versions and checks all rows before
 });
 it("runs all rows with isolated resources, persists each report, and continues after a failed assertion", async () => {
   const b = fixture();
+  b.plan.dataPolicy = "REVIEW_REQUIRED";
+  b.dataset.review = {
+    confirmed: true,
+    sources: { order: "MODEL_SUGGESTED", name: "USER" },
+  };
   const demo = demoApp();
   await demo.listen({ host: "127.0.0.1", port: 3100 });
   const old = process.env.DEMO_PASSWORD;
@@ -127,5 +132,52 @@ it("runs all rows with isolated resources, persists each report, and continues a
     if (old === undefined) delete process.env.DEMO_PASSWORD;
     else process.env.DEMO_PASSWORD = old;
     await demo.close();
+  }
+});
+
+it("blocks unreviewed generated data through both dataset and single-run APIs", async () => {
+  const b = fixture();
+  b.plan.dataPolicy = "REVIEW_REQUIRED";
+  const app = await createApp(new Store("file::memory:"), new MockAIProvider());
+  try {
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/approve",
+          payload: { ...b, confirmed: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/datasets",
+          payload: b.dataset,
+        })
+      ).statusCode,
+    ).toBe(200);
+    const datasetRun = await app.inject({
+      method: "POST",
+      url: "/api/run",
+      payload: {
+        planId: b.plan.planId,
+        version: 1,
+        dataset: { id: b.dataset.id, version: 1 },
+      },
+    });
+    expect(datasetRun.statusCode).toBe(400);
+    expect(datasetRun.body).toContain("尚未审核确认");
+    const singleRun = await app.inject({
+      method: "POST",
+      url: "/api/run",
+      payload: { planId: b.plan.planId, version: 1 },
+    });
+    expect(singleRun.statusCode).toBe(400);
+    expect(singleRun.body).toContain("尚未审核确认");
+    expect((await app.inject("/api/reports")).json()).toHaveLength(0);
+  } finally {
+    await app.close();
   }
 });

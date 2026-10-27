@@ -839,3 +839,112 @@ it("recovers omitted fields from full local recording evidence without enlarging
     validatePlanData(parameterizeRecordedInputs(plan, safe, evidence), safe),
   ).toThrow("password");
 });
+
+it("compiles new test values into reviewable data instead of failing plan generation", async () => {
+  const { model, calls } = provider();
+  const original = model.runTask.bind(model);
+  model.runTask = async (...args) => {
+    const output = (await original(...args)) as any;
+    if (args[0] === "PLAN_DESIGN") {
+      output.steps[0].body = { source: "STATIC", value: {} };
+      output.steps[0].bodyBindings = {
+        "$.limit": { source: "STATIC", value: 20 },
+        "$.placeholder_key": {
+          source: "STATIC",
+          value: "new-user-scenario-value",
+        },
+      };
+    }
+    return output;
+  };
+  const job = createPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  await executePipeline(job, model);
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  await executePipeline(job, model);
+  confirmCase(job, job.testCase);
+  await executePipeline(job, model);
+  expect(job.state, job.error).toBe("NEEDS_REVIEW");
+  expect(job.validation!.blockingErrors).toEqual([]);
+  expect(
+    job.validation!.reviewRequired.some(
+      (e) => e.includes("模型建议") && e.includes("$.limit"),
+    ),
+  ).toBe(true);
+  const limit = job.plan!.steps[0].bodyBindings!["$.limit"];
+  expect(limit.source).toBe("TEST_DATA");
+  if (limit.source !== "TEST_DATA") throw new Error("expected data binding");
+  expect(job.plan!.dataRequirements![limit.name].source).toBe(
+    "MODEL_SUGGESTED",
+  );
+  expect(job.datasetCandidate!.rows[0].values[limit.name]).toBe(20);
+  expect(job.datasetCandidate!.review?.confirmed).toBe(false);
+  expect(calls.filter((c) => c.task === "PLAN_DESIGN")).toHaveLength(1);
+  const before = structuredClone(job.datasetCandidate);
+  job.state = "FAILED";
+  await executePipeline(job, model);
+  expect(job.datasetCandidate).toEqual(before);
+  regeneratePlan(job);
+  expect(job.dataProposals).toBeUndefined();
+});
+
+it("represents a declared data reference with no value as a missing input for human review", async () => {
+  const { model } = provider();
+  const original = model.runTask.bind(model);
+  model.runTask = async (...args) => {
+    const output = (await original(...args)) as any;
+    if (args[0] === "PLAN_DESIGN") {
+      output.parameters = { missing_limit: "number" };
+      output.steps[0].body = { source: "STATIC", value: {} };
+      output.steps[0].bodyBindings = {
+        "$.limit": { source: "TEST_DATA", name: "missing_limit" },
+      };
+    }
+    return output;
+  };
+  const job = createPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  await executePipeline(job, model);
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  await executePipeline(job, model);
+  confirmCase(job, job.testCase);
+  await executePipeline(job, model);
+  expect(job.state, job.error).toBe("NEEDS_REVIEW");
+  expect(job.validation!.blockingErrors).toEqual([]);
+  expect(job.plan!.dataRequirements!.missing_limit.source).toBe("MISSING");
+  expect(job.datasetCandidate!.rows[0].values).not.toHaveProperty(
+    "missing_limit",
+  );
+});
+
+it("keeps sensitive model-proposed inputs missing instead of storing their raw values", async () => {
+  const { parameterizeRecordedInputs } =
+    await import("../../packages/planner/src/evidence");
+  const { model } = provider();
+  const job = createPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  const plan = structuredClone(demoArtifacts().plan);
+  plan.parameters = {};
+  plan.steps = [plan.steps[0]];
+  plan.steps[0].apiId = job.catalog![0].apiId;
+  plan.steps[0].body = {
+    source: "STATIC",
+    value: { password: "do-not-store-this-value" },
+  };
+  const candidates = dataCandidates(job.input.recording, job.catalog!);
+  const compiled = parameterizeRecordedInputs(plan, candidates, {
+    recording: job.input.recording,
+    catalog: job.catalog!,
+    allowSuggestions: true,
+  });
+  expect(JSON.stringify(compiled)).not.toContain("do-not-store-this-value");
+  const proposal = candidates.find((c) => c.source === "MISSING");
+  expect(proposal?.value).toBeUndefined();
+  expect(validatePlanData(compiled, candidates)).toEqual({});
+});

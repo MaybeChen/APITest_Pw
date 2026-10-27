@@ -825,6 +825,16 @@ test("reviews recommended interfaces and edited semantic expectations before gen
       job.plan = {
         ...bundle.plan,
         parameters: { order_body: "object" },
+        dataPolicy: "REVIEW_REQUIRED",
+        dataRequirements: {
+          order_body: {
+            source: "MODEL_SUGGESTED",
+            apiId: "create",
+            location: "BODY",
+            path: "$",
+            note: "模型建议，需审核",
+          },
+        },
         steps: [
           {
             ...bundle.plan.steps[0],
@@ -835,6 +845,10 @@ test("reviews recommended interfaces and edited semantic expectations before gen
       job.datasetCandidate = {
         id: "captured-data",
         name: "采集候选数据",
+        review: {
+          confirmed: false,
+          sources: { order_body: "MODEL_SUGGESTED" },
+        },
         planId: job.plan.planId,
         planVersion: job.plan.version,
         version: 1,
@@ -918,6 +932,48 @@ test("reviews recommended interfaces and edited semantic expectations before gen
   await expect(page.getByLabel("数据组（JSON 数组）")).toHaveValue(
     /采集的订单名称/,
   );
+  await expect(
+    page.getByRole("cell", { name: "模型建议", exact: true }),
+  ).toBeVisible();
+  let savedData: any;
+  await page.route("**/api/approve", async (route) => {
+    const payload = route.request().postDataJSON();
+    payload.plan.status = payload.testCase.status = "APPROVED";
+    await route.fulfill({ json: payload });
+  });
+  await page.route("**/api/datasets", async (route) => {
+    if (route.request().method() === "POST") {
+      savedData = route.request().postDataJSON();
+      await route.fulfill({ json: savedData });
+    } else await route.fulfill({ json: [] });
+  });
+  await page
+    .getByRole("button", { name: "批准并保存版本", exact: true })
+    .click();
+  const execute = page.getByRole("button", {
+    name: "执行全部数据组",
+    exact: true,
+  });
+  await expect(execute).toBeDisabled();
+  const review = page.getByRole("checkbox", {
+    name: "我已核对所有数据组的参数来源、类型和值",
+  });
+  await review.check();
+  await expect(execute).toBeEnabled();
+  const rows = JSON.parse(
+    await page.getByLabel("数据组（JSON 数组）").inputValue(),
+  );
+  rows[0].values.order_body.name = "用户指定的订单名称";
+  await page.getByLabel("数据组（JSON 数组）").fill(JSON.stringify(rows));
+  await expect(review).not.toBeChecked();
+  await expect(execute).toBeDisabled();
+  await expect(
+    page.getByRole("cell", { name: "用户指定", exact: true }),
+  ).toBeVisible();
+  await review.check();
+  await page.getByRole("button", { name: "保存数据集", exact: true }).click();
+  await expect.poll(() => savedData?.review?.confirmed).toBe(true);
+  expect(savedData.review.sources.order_body).toBe("USER");
 });
 
 test("records, reviews and saves a reusable precondition UI profile from configuration", async ({

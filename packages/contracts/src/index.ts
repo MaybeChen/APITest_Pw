@@ -241,6 +241,20 @@ export const stepSchema = z.object({
   resourceVariable: z.string().optional(),
   requiresOwnership: z.boolean().default(false),
 });
+export const dataOrigin = z.enum([
+  "RECORDING",
+  "USER",
+  "MODEL_SUGGESTED",
+  "MISSING",
+]);
+export const dataRequirementSchema = z.object({
+  source: dataOrigin,
+  apiId: id,
+  location: z.enum(["PATH", "QUERY", "BODY", "HEADER"]),
+  path: z.string(),
+  requestId: id.optional(),
+  note: z.string().optional(),
+});
 export const planSchema = z.object({
   planId: id,
   caseId: id,
@@ -253,6 +267,8 @@ export const planSchema = z.object({
   uiActions: z.array(action),
   steps: z.array(stepSchema).min(1),
   parameters: z.record(z.string(), valueType).optional(),
+  dataPolicy: z.literal("REVIEW_REQUIRED").optional(),
+  dataRequirements: z.record(z.string(), dataRequirementSchema).optional(),
   execution: z
     .object({ maxConcurrency: z.number().int().min(1).max(8) })
     .optional(),
@@ -329,6 +345,12 @@ export const datasetSchema = z
     planId: id,
     planVersion: z.number().int().positive(),
     version: z.number().int().positive(),
+    review: z
+      .object({
+        confirmed: z.boolean(),
+        sources: z.record(z.string(), dataOrigin),
+      })
+      .optional(),
     rows: z
       .array(
         z.object({

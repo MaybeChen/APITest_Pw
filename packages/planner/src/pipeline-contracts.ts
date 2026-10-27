@@ -4,6 +4,9 @@ import {
   binding,
   caseSchema,
   planSchema,
+  dataRequirementSchema,
+  datasetSchema,
+  valueType,
 } from "../../contracts/src/index.js";
 export const taskIds = [
   "API_ORGANIZATION",
@@ -96,22 +99,16 @@ export const pipelineFields = {
       maxInterfacesPerBatch: z.number().int().min(1).max(30),
     })
     .optional(),
-  datasetCandidate: z
-    .object({
-      id: z.string(),
-      name: z.string(),
-      planId: z.string(),
-      planVersion: z.number(),
-      version: z.number(),
-      rows: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          values: z.record(z.string(), z.unknown()),
-        }),
-      ),
-    })
+  dataProposals: z
+    .array(
+      dataRequirementSchema.extend({
+        name: z.string(),
+        type: valueType,
+        value: z.unknown().optional(),
+      }),
+    )
     .optional(),
+  datasetCandidate: datasetSchema.optional(),
 };
 export const taskSchemas = {
   API_ORGANIZATION: organizationOutput,
@@ -193,7 +190,7 @@ export const taskInstructions: Record<PipelineTask, string> = {
   CASE_DESIGN:
     "基于用户场景和用户选择的接口摘要设计语义化测试用例。输出前置条件、输入要求、业务操作步骤及每步预期。API 步骤 executionKind=API；人工/页面准备分别标记 MANUAL_PRECONDITION/UI_PRECONDITION，不把这些步骤伪装成接口。输入不提供完整原始录制，禁止猜测未确认的业务规则。保留依赖，不确定预期标 NEEDS_REVIEW。身份和版本由程序设置。",
   PLAN_DESIGN:
-    "仅为用户确认的 Case 编译 API 调用 DAG，不修改 Case。API 节点引用选中的接口 ID 和 API 语义步骤；非 API 前置条件不生成接口节点。显式 dependsOn、extract、extractTypes、bodyBindings 和资源锁。业务输入必须用 dataParameters 中的 TEST_DATA 名称，不能把录制样例 ID 当可删除资源。响应变量必须从上游提取且依赖明确；认证仅用提供的 authProfileRef；AUTH_CONTEXT.name 是认证协议 tokenSources 的逻辑变量名，不是 Header 名或 storageKey，只能逐字引用 authContract.availableContexts，已由认证协议提供的 Header 不要在节点重复覆盖。没有可用来源时标记 MANUAL_REVIEW，不能编造认证变量。自定义 Header 不得根据名称猜测 uuid、timestamp、nonce 或其他运行时值；只有有来源的上游响应变量或用户配置的认证协议可以替换采集值，否则使用原始采集值对应的 TEST_DATA。默认串行，仅独立只读 GET/HEAD 且无资源冲突才可 parallelSafe；写操作不重试。删除必须绑定本次 SETUP 创建的专属资源，并有 ALWAYS CLEANUP。参数类型按 dataParameters 定义。HTTP 状态码断言 kind=status 必须 operator=eq 且 value 为 100..599 的整数，不能填字符串或业务 code；响应业务 code 使用 kind=json 和具体 path。bodyBindings 的键只能是 $、$.field、$.items[0].id 这类路径，不支持裸字段名、JSON Pointer 或通配符。断言 dataRef 仅在预期值来自测试数据时填写有效参数名，否则省略该字段，禁止填空字符串。无请求体时省略 body；body 必须是 Binding 对象，不能为 null。身份版本环境由程序固定。",
+    "仅为用户确认的 Case 编译 API 调用 DAG，不修改 Case。API 节点引用选中的接口 ID 和 API 语义步骤；非 API 前置条件不生成接口节点。显式 dependsOn、extract、extractTypes、bodyBindings 和资源锁。业务输入优先用 dataParameters 中的 TEST_DATA 名称。明确来自上游响应时用 RESPONSE_VARIABLE 并声明提取和依赖。确需新的测试值时可用 STATIC 表达参数意图，程序会移到独立候选数据集并标为待审核的模型建议；不要编造不存在的 TEST_DATA 名称，不要宣称模型建议是用户确认值。不能把录制样例 ID 当可删除资源。响应变量必须从上游提取且依赖明确；认证仅用提供的 authProfileRef；AUTH_CONTEXT.name 是认证协议 tokenSources 的逻辑变量名，不是 Header 名或 storageKey，只能逐字引用 authContract.availableContexts，已由认证协议提供的 Header 不要在节点重复覆盖。没有可用来源时标记 MANUAL_REVIEW，不能编造认证变量。自定义 Header 不得根据名称猜测 uuid、timestamp、nonce 或其他运行时值；只有有来源的上游响应变量或用户配置的认证协议可以替换采集值，否则使用原始采集值对应的 TEST_DATA。默认串行，仅独立只读 GET/HEAD 且无资源冲突才可 parallelSafe；写操作不重试。删除必须绑定本次 SETUP 创建的专属资源，并有 ALWAYS CLEANUP。参数类型按 dataParameters 定义。HTTP 状态码断言 kind=status 必须 operator=eq 且 value 为 100..599 的整数，不能填字符串或业务 code；响应业务 code 使用 kind=json 和具体 path。bodyBindings 的键只能是 $、$.field、$.items[0].id 这类路径，不支持裸字段名、JSON Pointer 或通配符。断言 dataRef 仅在预期值来自测试数据时填写有效参数名，否则省略该字段，禁止填空字符串。无请求体时省略 body；body 必须是 Binding 对象，不能为 null。身份版本环境由程序固定。dataPolicy 和 dataRequirements 由本地编译器生成，不要自行推断数据已确认。",
   PLAN_REPAIR:
     "仅修复给出的局部执行节点和校验错误，返回 replacements 中被修改的既有节点；不得创建未知 ID、增加接口、改 Case、参数声明、环境权限或认证配置。必须保留业务语义、资源归属和清理策略。断言未使用测试数据预期值时省略 dataRef，禁止填空字符串。无请求体时省略 body；body 必须是 Binding 对象，不能为 null。修复时 bodyBindings 仅支持 $、$.field、$[0].field 形式；kind=status 只能用 eq 比较 100..599 的整数，业务 code 必须用 kind=json。AUTH_CONTEXT.name 必须存在于 authContract.availableContexts，不得将 Header 名当变量名；如果缺少来源应保留待审核并说明配置缺失，不得猜测或静默删除必要认证头。无法修复时返回空 replacements 与原因。",
 };
