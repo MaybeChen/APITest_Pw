@@ -7,7 +7,13 @@ import type {
   Binding,
   Plan,
 } from "../../contracts/src/index.js";
-import { redact, valueKind, atPath, setAtPath } from "../../core/src/index.js";
+import {
+  redact,
+  valueKind,
+  atPath,
+  setAtPath,
+  observedHeaderBinding,
+} from "../../core/src/index.js";
 import {
   estimateTokens,
   taskMessages,
@@ -45,15 +51,8 @@ export function interfaceFacts(
   );
   asset = structuredClone(asset);
   // Replace historic name-based guesses with the observed header value.
-  for (const [name, value] of Object.entries(requests[0]?.headers ?? {})) {
-    if (protocol.test(name) || name.toLowerCase() === "cookie") continue;
-    asset.headers[name] =
-      !credential.test(name) &&
-      redact(value, name) === value &&
-      !value.includes("[REDACTED]")
-        ? { source: "STATIC", value }
-        : { source: "MANUAL_REVIEW" };
-  }
+  for (const [name, value] of Object.entries(requests[0]?.headers ?? {}))
+    asset.headers[name] = observedHeaderBinding(name, value);
   const variants = new Map<string, (typeof requests)[number]>();
   for (const r of requests) {
     const shape = JSON.stringify({
@@ -313,12 +312,20 @@ export function applyRecordedHeaders(
     for (const name of Object.keys(step.headers)) {
       if (
         configured.has(name.toLowerCase()) ||
-        (!protocol.test(name) &&
-          !Object.keys(item.asset.headers).some(
-            (key) => key.toLowerCase() === name.toLowerCase(),
-          ))
+        !Object.keys(item.asset.headers).some(
+          (key) => key.toLowerCase() === name.toLowerCase(),
+        )
       )
         delete step.headers[name];
+    }
+    for (const [name, binding] of Object.entries(item.asset.headers)) {
+      if (!protocol.test(name) && name.toLowerCase() !== "cookie") continue;
+      if (configured.has(name.toLowerCase())) continue;
+      const existing = Object.keys(step.headers).find(
+        (key) => key.toLowerCase() === name.toLowerCase(),
+      );
+      if (existing) delete step.headers[existing];
+      step.headers[name] = structuredClone(binding);
     }
     for (const [name, info] of Object.entries(item.customHeaders)) {
       if (configured.has(name.toLowerCase())) continue;
@@ -337,7 +344,14 @@ export function applyRecordedHeaders(
       if (candidate) {
         step.headers[name] = { source: "TEST_DATA", name: candidate.name };
         result.parameters[candidate.name] = candidate.type;
-      } else step.headers[name] = structuredClone(info.binding) as Binding;
+      } else {
+        const fallback = structuredClone(info.binding) as Binding;
+        step.headers[name] = ["AUTH_CONTEXT", "RUNTIME_GENERATED"].includes(
+          fallback.source,
+        )
+          ? { source: "MANUAL_REVIEW" }
+          : fallback;
+      }
     }
   }
   return result;
@@ -399,6 +413,7 @@ export function parameterizeRecordedInputs(
               setAtPath(undefined, path, null); // Same safe path grammar as runner.
               value = atPath(request.body, path);
             } else if (location === "QUERY") value = request.query[path];
+            else if (location === "HEADER") value = request.headers[path];
             else if (location === "PATH") {
               const segments = item.asset.pathTemplate.split("/");
               const index = segments.indexOf(`{${path}}`);
@@ -507,6 +522,9 @@ export function parameterizeRecordedInputs(
     step.body = bind(step.body, "BODY", "$");
     for (const [key, binding] of Object.entries(step.bodyBindings ?? {}))
       step.bodyBindings![key] = bind(binding, "BODY", key)!;
+    for (const [key, binding] of Object.entries(step.headers))
+      if (!protocol.test(key) && key.toLowerCase() !== "cookie")
+        step.headers[key] = bind(binding, "HEADER", key)!;
   }
   return result;
 }

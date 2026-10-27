@@ -18,6 +18,7 @@ import type {
 } from "../../contracts/src/index.js";
 import {
   allowedURL,
+  observedHeaderBinding,
   redact,
   shouldCaptureRequest,
 } from "../../core/src/index.js";
@@ -427,18 +428,7 @@ export function analyze(recording: Recording, filter: Filter = {}) {
     }
     const headers: Asset["headers"] = {};
     for (const h of Object.keys(req.headers)) {
-      headers[h] =
-        /^(cookie|host|content-length|user-agent|accept(?:-.*)?|sec-.*|connection)$/i.test(
-          h,
-        )
-          ? { source: "CLIENT_MANAGED" }
-          : /authorization|csrf|token|secret|password|signature|api.?key/i.test(
-                h,
-              ) ||
-              redact(req.headers[h], h) !== req.headers[h] ||
-              /\[REDACTED\]/.test(req.headers[h])
-            ? { source: "MANUAL_REVIEW" }
-            : { source: "STATIC", value: req.headers[h] };
+      headers[h] = observedHeaderBinding(h, req.headers[h]);
     }
     asset = {
       apiId,

@@ -31,6 +31,7 @@ export const generationSchema = z.object({
     "NEEDS_REVIEW",
     "WAITING_INTERFACE_REVIEW",
     "WAITING_CASE_REVIEW",
+    "WAITING_CONFIGURATION",
   ]),
   provider: z.object({ name: z.string(), version: z.string() }),
   createdAt: z.number(),

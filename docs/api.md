@@ -287,7 +287,7 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 
 模型调用次数通常为“接口整理批次数 + 场景筛选批次数 + 语义用例 1 次 + 调用计划 1 次”，另可能有 1 次局部修复；每个模型批次/阶段最多尝试 2 次。确认等待期间与回放期间不调用模型。目录/样例压缩仅影响模型输入，不能当作执行数据；超过阶段预算会明确报错，请缩小场景或所选接口范围。
 
-- `POST /api/generations/:id/regenerate-plan`：`{revision}`。仅新版且接口、用例均已确认的任务可用；活动任务及过期修订返回 409。保留整理、筛选与用例结果，清空计划、校验、修复和最终校验检查点及候选数据集后重跑，读取当前认证协议配置。不会修改已批准保存的用例、计划或数据集；新草稿仍需审核。
+- `POST /api/generations/:id/regenerate-plan`：`{revision,authProfileRef?}`。仅新版且接口、用例均已确认的任务可用；活动任务及过期修订返回 409。保留整理、筛选与用例结果，清空计划、校验、修复和最终校验检查点及候选数据集后重跑，读取当前认证协议配置。不会修改已批准保存的用例、计划或数据集；新草稿仍需审核。
 
 ### 前置 UI 流程录制
 
@@ -308,3 +308,13 @@ API 本地端口 3000，前端通过 Vite 同源代理使用 `/api`。交互文�
 新版生成的 Plan 包含 `dataPolicy:"REVIEW_REQUIRED"`，以及 `dataRequirements`（参数名映射到 `{source,apiId,location,path,requestId?,note?}`）。source 是 RECORDING / USER / MODEL_SUGGESTED / MISSING。模型的新固定值由编译器转成 TEST_DATA，来源为 MODEL_SUGGESTED；没有值的声明引用进入 MISSING。上游响应继续使用 RESPONSE_VARIABLE。缺失或建议值列入 `validation.reviewRequired`，不作为计划生成失败重试的原因。
 
 `datasetCandidate.review` 初始为 `{confirmed:false,sources:{参数名:来源}}`。在数据编辑界面核对各组值，编辑值标为 USER；确认复选框后保存的数据集记录 `confirmed:true`。`POST /api/datasets` 可以保存完整但尚未审核的数据集；`POST /api/run` 和执行器拒绝未审核的新策略数据集，拒绝缺值/错误类型/MISSING 来源。已保存数据集的内容和审核标记均不可覆盖，需复制后重新确认。旧策略计划不强制新增确认标记。
+
+### 调用意图编译（默认）
+
+新任务使用 `planCompilerVersion:2`。PLAN_DESIGN 模型输出 CallIntent（calls、输入差异、依赖、checks），本地编译器输出 Plan 与独立 Dataset；不再接受模型直接设置执行权限、Header、并发或清理策略。`GET /api/generations/:id` 增加 `callIntent`、`compilerIssues` 和 `preflight:{blockers,checkedAt}`。
+
+配置缺失时任务状态为 `WAITING_CONFIGURATION`，保留已确认接口和用例，尚未调用计划模型。补充配置后调用 `POST /api/generations/:id/regenerate-plan`，可传 `authProfileRef` 切换协议，并检查最新配置和输入环境变量。`resume` 不绕过此等待点。旧任务恢复仍兼容旧 Plan 协议；点击重新生成会升级调用意图协议。
+
+编译输出的 `plan.compilation:{version:2,blockers}` 被 `/api/validate`、`/api/approve` 和运行器共同检查；有编译阻塞的计划不能直接批准执行。新编译流程不调用模型局部修复完整 Plan。前置检查通过只表示配置静态完整，不表示已验证登录或回放。
+
+JSON 数组断言新增 `operator:contains|notContains`：path 指向实际存在的数组字段，value 为要匹配的原始值或非空字段对象（对象为递归子集匹配，类型严格相同）。不支持 JSONPath 通配符或过滤表达式。非数组响应时两种断言均失败。条件兜底清理的 `onlyIfOwned:true` 只能用于要求资源所有权的 CLEANUP 节点。

@@ -8,7 +8,7 @@ import {
   ModelAIProvider,
 } from "../../packages/planner/src/index";
 import {
-  createPipeline,
+  createPipeline as createCurrentPipeline,
   executePipeline,
   confirmInterfaces,
   confirmCase,
@@ -21,6 +21,12 @@ import {
   defaultLimits,
 } from "../../packages/planner/src/evidence";
 import { validate } from "../../packages/core/src/index";
+// These regression fixtures exercise saved v1 plan output and its compatibility path.
+const createPipeline = (...args: Parameters<typeof createCurrentPipeline>) => {
+  const job = createCurrentPipeline(...args);
+  job.planCompilerVersion = 1;
+  return job;
+};
 const recording = recordingSchema.parse({
   id: "pipeline-record",
   workspaceId: "workspace-a",
@@ -637,8 +643,10 @@ it("normalizes absent optional plan fields and preserves honest assertion proven
   const fixture = demoArtifacts();
   normalized.steps[0].ownsResource = true;
   expect(
-    validate(fixture.testCase, normalized, fixture.assets, demoEnv),
-  ).toContain("Owned resource requires extraction");
+    validate(fixture.testCase, normalized, fixture.assets, demoEnv).some(
+      (error) => error.includes("Owned resource requires extraction"),
+    ),
+  ).toBe(true);
   const repaired = taskSchemas.PLAN_REPAIR.parse(
     normalizeTaskOutput("PLAN_REPAIR", {
       replacements: [raw.steps[0]],
@@ -864,6 +872,12 @@ it("compiles new test values into reviewable data instead of failing plan genera
   await executePipeline(job, model);
   confirmInterfaces(job, [job.catalog![0].apiId], "scene");
   await executePipeline(job, model);
+  job.authContract = {
+    availableContexts: ["configured-auth"],
+    headers: {
+      authorization: { source: "AUTH_CONTEXT", name: "configured-auth" },
+    },
+  };
   confirmCase(job, job.testCase);
   await executePipeline(job, model);
   expect(job.state, job.error).toBe("NEEDS_REVIEW");
@@ -911,6 +925,12 @@ it("represents a declared data reference with no value as a missing input for hu
   await executePipeline(job, model);
   confirmInterfaces(job, [job.catalog![0].apiId], "scene");
   await executePipeline(job, model);
+  job.authContract = {
+    availableContexts: ["configured-auth"],
+    headers: {
+      authorization: { source: "AUTH_CONTEXT", name: "configured-auth" },
+    },
+  };
   confirmCase(job, job.testCase);
   await executePipeline(job, model);
   expect(job.state, job.error).toBe("NEEDS_REVIEW");
@@ -947,4 +967,77 @@ it("keeps sensitive model-proposed inputs missing instead of storing their raw v
   const proposal = candidates.find((c) => c.source === "MISSING");
   expect(proposal?.value).toBeUndefined();
   expect(validatePlanData(compiled, candidates)).toEqual({});
+});
+
+it("enforces conservative write execution and refreshes guessed authentication in cached catalogs", async () => {
+  const { model, calls } = provider();
+  const original = model.runTask.bind(model);
+  model.runTask = async (...args) => {
+    const output = (await original(...args)) as any;
+    if (args[0] === "PLAN_DESIGN") {
+      output.steps[0].parallelSafe = true;
+      output.steps[0].retries = 2;
+      output.steps[0].headers["x-adc-page-token"] = {
+        source: "AUTH_CONTEXT",
+        name: "x-adc-page-token",
+      };
+    }
+    return output;
+  };
+  const captured = structuredClone(recording);
+  captured.requests[0].headers["x-adc-page-token"] = "[REDACTED]";
+  captured.requests[0].headers["content-type"] = "application/json";
+  captured.requests[0].headers.origin = demoEnv.baseURL;
+  captured.requests[0].headers.referer = demoEnv.baseURL + "/evaluation";
+  const job = createPipeline(
+    { recording: captured, assets: [], environment: demoEnv },
+    model,
+  );
+  await executePipeline(job, model);
+  // Simulate an interface organization checkpoint saved before header guessing was removed.
+  const cached = job.stages.find((stage) => stage.id === "API_ORGANIZATION")!
+    .output as any[];
+  cached[0].asset.headers["x-adc-page-token"] = {
+    source: "AUTH_CONTEXT",
+    name: "x-adc-page-token",
+  };
+  cached[0].customHeaders["x-adc-page-token"].binding = {
+    source: "AUTH_CONTEXT",
+    name: "x-adc-page-token",
+  };
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  await executePipeline(job, model);
+  confirmCase(job, job.testCase);
+  await executePipeline(job, model);
+  expect(calls.some((c) => c.task === "PLAN_REPAIR")).toBe(false);
+  expect(job.plan!.steps[0].parallelSafe).toBe(false);
+  expect(job.plan!.steps[0].headers["content-type"]).toEqual({
+    source: "STATIC",
+    value: "application/json",
+  });
+  expect(job.plan!.steps[0].headers.origin).toEqual({
+    source: "STATIC",
+    value: demoEnv.baseURL,
+  });
+  expect(job.plan!.steps[0].headers.referer).toEqual({
+    source: "STATIC",
+    value: demoEnv.baseURL + "/evaluation",
+  });
+  expect(job.plan!.steps[0].retries).toBe(0);
+  expect(job.plan!.steps[0].headers["x-adc-page-token"]).toEqual({
+    source: "MANUAL_REVIEW",
+  });
+  expect(
+    job.validation!.blockingErrors.some((e) =>
+      e.includes("认证 Header x-adc-page-token 缺少已配置来源"),
+    ),
+  ).toBe(true);
+  expect(
+    job.validation!.errors.some((e) =>
+      e.includes("Unknown authentication context x-adc-page-token"),
+    ),
+  ).toBe(false);
+  expect(
+    job.validation!.errors.some((e) => e.includes("Unsafe parallel")),
+  ).toBe(false);
 });

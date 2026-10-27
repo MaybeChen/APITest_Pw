@@ -20,6 +20,7 @@ import type {
 } from "../../contracts/src/index.js";
 import {
   allowedURL,
+  jsonArrayContains,
   atPath,
   ordered,
   redact,
@@ -100,6 +101,15 @@ export class FixtureManager {
       owner: this.runId,
       cleaned: false,
     });
+  }
+  hasActive(id: unknown, variable: string) {
+    return this.resources.some(
+      (resource) =>
+        resource.id === String(id) &&
+        resource.variable === variable &&
+        resource.owner === this.runId &&
+        !resource.cleaned,
+    );
   }
   assertOwned(id: unknown, variable: string) {
     if (
@@ -205,6 +215,19 @@ export async function run(
         attempts: 0,
         assertions: [],
       };
+      if (
+        step.phase === "CLEANUP" &&
+        step.onlyIfOwned &&
+        !fixtures.hasActive(
+          vars[step.resourceVariable!],
+          step.resourceVariable!,
+        )
+      ) {
+        result.status = "PASSED";
+        result.endedAt = Date.now();
+        report.steps.push(result);
+        return;
+      }
       const dependencyFailed = step.dependsOn.some(
         (d) => report.steps.find((s) => s.stepId === d)?.status !== "PASSED",
       );
@@ -341,7 +364,13 @@ export async function run(
                   ? actual !== undefined
                   : assertion.operator === "notExists"
                     ? actual === undefined
-                    : isDeepStrictEqual(actual, expected),
+                    : assertion.operator === "contains"
+                      ? Array.isArray(actual) &&
+                        jsonArrayContains(actual, expected)
+                      : assertion.operator === "notContains"
+                        ? Array.isArray(actual) &&
+                          !jsonArrayContains(actual, expected)
+                        : isDeepStrictEqual(actual, expected),
             };
           });
           if (result.assertions.every((a) => a.passed)) {

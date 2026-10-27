@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { Store } from "../../packages/storage/src/index";
 import { createApp } from "../../apps/server/src/app";
 import { MockAIProvider } from "../../packages/planner/src/index";
@@ -30,6 +30,7 @@ const recording = recordingSchema.parse({
   ],
 });
 it("persists both confirmation gates, rejects stale edits, and reuses interface organization when the scene changes", async () => {
+  vi.stubEnv("DEMO_PASSWORD", "demo-only");
   const store = new Store("file::memory:");
   const provider = new MockAIProvider();
   const calls: string[] = [];
@@ -245,6 +246,105 @@ it("persists both confirmation gates, rejects stale edits, and reuses interface 
     expect(next.input.caseId).not.toBe(job.input.caseId);
     expect(calls.filter((c) => c === "API_ORGANIZATION")).toHaveLength(1);
     expect((await jobFor(id)).state).toBe("NEEDS_REVIEW");
+  } finally {
+    await app.close();
+    vi.unstubAllEnvs();
+  }
+});
+
+it("waits for real prerequisite configuration without calling the plan model and resumes with a selected profile", async () => {
+  const store = new Store("file::memory:");
+  const provider = new MockAIProvider();
+  const calls: string[] = [];
+  const original = provider.runTask.bind(provider);
+  provider.runTask = async (...args) => {
+    calls.push(args[0]);
+    return original(...args);
+  };
+  const app = await createApp(store, provider);
+  const wait = async (id: string, state: Generation["state"]) => {
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const job = (
+        await app.inject(`/api/generations/${id}`)
+      ).json() as Generation;
+      if (job.state === state) return job;
+      if (job.state === "FAILED") throw new Error(job.error);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`did not reach ${state}`);
+  };
+  try {
+    const captured = structuredClone(recording);
+    captured.requests[0].headers["x-page-token"] = "[REDACTED]";
+    const id = (
+      await app.inject({
+        method: "POST",
+        url: "/api/generations",
+        payload: { recording: captured, environmentRef: "demo" },
+      })
+    ).json().id;
+    let job = await wait(id, "WAITING_INTERFACE_REVIEW");
+    await app.inject({
+      method: "POST",
+      url: `/api/generations/${id}/interfaces`,
+      payload: {
+        revision: job.revision,
+        selectedApiIds: [job.catalog![0].apiId],
+        scenario: captured.scenario,
+        confirmed: true,
+      },
+    });
+    job = await wait(id, "WAITING_CASE_REVIEW");
+    const confirmedCase = structuredClone(job.testCase);
+    await app.inject({
+      method: "POST",
+      url: `/api/generations/${id}/case`,
+      payload: {
+        revision: job.revision,
+        testCase: job.testCase,
+        authProfileRef: "demo-auth",
+        confirmed: true,
+      },
+    });
+    job = await wait(id, "WAITING_CONFIGURATION");
+    expect(
+      job.preflight!.blockers.some((message) =>
+        message.includes("x-page-token"),
+      ),
+    ).toBe(true);
+    expect(calls.filter((task) => task === "PLAN_DESIGN")).toHaveLength(0);
+    await app.inject({ method: "POST", url: `/api/generations/${id}/resume` });
+    expect(calls.filter((task) => task === "PLAN_DESIGN")).toHaveLength(0);
+    const profile = await app.inject({
+      method: "POST",
+      url: "/api/auth-profiles",
+      payload: {
+        id: "real-ui",
+        environmentRef: "demo",
+        actions: [],
+        readySelector: "body",
+        tokenSources: { page: { storageKey: "page-token" } },
+        headers: { "x-page-token": { source: "AUTH_CONTEXT", name: "page" } },
+      },
+    });
+    expect(profile.statusCode, profile.body).toBe(200);
+    const resumed = await app.inject({
+      method: "POST",
+      url: `/api/generations/${id}/regenerate-plan`,
+      payload: { revision: job.revision, authProfileRef: "real-ui" },
+    });
+    expect(resumed.statusCode, resumed.body).toBe(200);
+    job = await wait(id, "NEEDS_REVIEW");
+    expect(job.planCompilerVersion).toBe(2);
+    expect(job.plan!.authProfileRef).toBe("real-ui");
+    expect(job.preflight!.blockers).toEqual([]);
+    expect(job.plan!.steps[0].headers).not.toHaveProperty("x-page-token");
+    expect(job.callIntent!.calls).toHaveLength(1);
+    expect(job.testCase!.objective).toBe(confirmedCase!.objective);
+    expect(calls.filter((task) => task === "CASE_DESIGN")).toHaveLength(1);
+    expect(calls.filter((task) => task === "PLAN_DESIGN")).toHaveLength(1);
+    expect(calls.filter((task) => task === "PLAN_REPAIR")).toHaveLength(0);
+    expect(job.validation!.blockingErrors).toEqual([]);
   } finally {
     await app.close();
   }

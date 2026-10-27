@@ -378,6 +378,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
           "NEEDS_REVIEW",
           "WAITING_INTERFACE_REVIEW",
           "WAITING_CASE_REVIEW",
+          "WAITING_CONFIGURATION",
         ].includes(job.state)
       )
         return { id: job.id };
@@ -432,9 +433,12 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
               job.provider.version !== aiProvider.version
             )
               throw new Error("模型名称或版本已改变，请创建新的生成任务");
+            const choice = z
+              .object({ authProfileRef: z.string().min(1).optional() })
+              .parse(body);
             const profile = await store.get<AuthProfile>(
               "auth",
-              job.authProfileRef ?? "",
+              choice.authProfileRef ?? job.authProfileRef ?? "",
             );
             if (!profile) throw new Error("所选 UI 认证协议尚未配置");
             if (
@@ -443,9 +447,28 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
             )
               throw new Error("UI 认证协议所属环境与当前计划不一致");
             regeneratePlan(job);
+            job.authProfileRef = profile.id;
             job.authContract = {
               availableContexts: Object.keys(profile.tokenSources),
               headers: profile.headers,
+              ...(profile.actions.some(
+                (action) =>
+                  action.secretRef &&
+                  process.env[action.secretRef] === undefined,
+              )
+                ? {
+                    missingInputRefs: [
+                      ...new Set(
+                        profile.actions.flatMap((action) =>
+                          action.secretRef &&
+                          process.env[action.secretRef] === undefined
+                            ? [action.secretRef]
+                            : [],
+                        ),
+                      ),
+                    ],
+                  }
+                : {}),
             };
           } else if (action === "interfaces") {
             const value = z
@@ -485,6 +508,24 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
             job.authContract = {
               availableContexts: Object.keys(profile.tokenSources),
               headers: profile.headers,
+              ...(profile.actions.some(
+                (action) =>
+                  action.secretRef &&
+                  process.env[action.secretRef] === undefined,
+              )
+                ? {
+                    missingInputRefs: [
+                      ...new Set(
+                        profile.actions.flatMap((action) =>
+                          action.secretRef &&
+                          process.env[action.secretRef] === undefined
+                            ? [action.secretRef]
+                            : [],
+                        ),
+                      ),
+                    ],
+                  }
+                : {}),
             };
           } else {
             resetScenario(

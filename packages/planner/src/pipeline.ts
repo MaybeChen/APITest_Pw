@@ -1,3 +1,5 @@
+import { compileCallIntent, preflightHeaders } from "./intent-compiler.js";
+import { callIntentSchema, type CallIntent } from "./call-intent.js";
 import { z } from "zod";
 import {
   caseSchema,
@@ -15,6 +17,7 @@ import { createGeneration, type Generation } from "./workflow.js";
 import { ModelConnectionError } from "./connection.js";
 import {
   taskSchemas,
+  taskOutputSchema,
   normalizeTaskOutput,
   type PipelineTask,
 } from "./pipeline-contracts.js";
@@ -56,6 +59,7 @@ export function createPipeline(
     input.authProfileRef ??
     (input.environment.id === "demo" ? "demo-auth" : undefined);
   job.pipelineVersion = 2;
+  job.planCompilerVersion = 2;
   job.scenario = job.input.recording.scenario;
   job.modelLimits = provider.planningLimits ?? defaultLimits;
   job.catalog = job.input.assets.map((asset) =>
@@ -215,6 +219,10 @@ export function regeneratePlan(job: Generation) {
   delete job.datasetCandidate;
   delete job.dataProposals;
   delete job.error;
+  job.planCompilerVersion = 2;
+  delete job.callIntent;
+  delete job.compilerIssues;
+  delete job.preflight;
   const downstream = new Set([
     "PLAN_DESIGN",
     "VALIDATION",
@@ -299,7 +307,7 @@ export async function executePipeline(
       };
       await persist();
       try {
-        const output = taskSchemas[task].parse(
+        const output = taskOutputSchema(task, request).parse(
           normalizeTaskOutput(
             task,
             await provider.runTask!(task, redact(request), {
@@ -425,6 +433,15 @@ export async function executePipeline(
         ],
       }));
     });
+    // Descriptions are cached; request/header facts must follow current local rules.
+    job.catalog = job.catalog!.map((item) => ({
+      ...interfaceFacts(job.input.recording, item.asset),
+      name: item.name,
+      description: item.description,
+      uncertainties: item.uncertainties,
+    }));
+    job.stages.find((stage) => stage.id === "API_ORGANIZATION")!.output =
+      structuredClone(job.catalog);
     job.recommendations = await run("API_SELECTION", async () => {
       const summaries = job.catalog!.map(interfaceSummary);
       const payload = (interfaces: typeof summaries) => ({
@@ -536,8 +553,12 @@ export async function executePipeline(
         confirmed: false,
       }));
     const normalize = (plan: z.infer<typeof planSchema>) => {
+      const useHeaders: typeof applyRecordedHeaders = (value, ...args) =>
+        job.planCompilerVersion === 2
+          ? value
+          : applyRecordedHeaders(value, ...args);
       const compiled = parameterizeRecordedInputs(
-        applyRecordedHeaders(
+        useHeaders(
           {
             ...plan,
             planId: `${job.id}-plan`,
@@ -565,6 +586,18 @@ export async function executePipeline(
           allowSuggestions: true,
         },
       );
+      for (const step of compiled.steps) {
+        const asset = selected.find((item) => item.apiId === step.apiId)?.asset;
+        if (
+          step.phase !== "API" ||
+          !asset ||
+          asset.risk !== "READ" ||
+          asset.operationType !== "READ" ||
+          !["GET", "HEAD"].includes(asset.method)
+        )
+          step.parallelSafe = false;
+        if (asset && asset.risk !== "READ") step.retries = 0;
+      }
       compiled.dataPolicy = "REVIEW_REQUIRED";
       compiled.dataRequirements = {};
       const used = new Set<string>();
@@ -601,44 +634,129 @@ export async function executePipeline(
         .map((c) => ({ ...c, source: c.source! }));
       return compiled;
     };
-    job.plan = await run("PLAN_DESIGN", async () =>
-      normalize(
-        await call<z.infer<typeof planSchema>>(
+    const planPayload = {
+      scenario: job.scenario,
+      testCase: job.testCase,
+      identity: { planVersion: job.input.planVersion },
+      environment: job.input.environment,
+      authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
+      authContract: job.authContract ?? {
+        availableContexts: [],
+        headers: {},
+      },
+      interfaces: selected.map((item) => ({
+        ...interfaceSummary(item),
+        asset: {
+          ...item.asset,
+          sources: item.samples.map((sample) => sample.requestId),
+          requestSchema: compact(item.asset.requestSchema),
+          responseSchema: compact(item.asset.responseSchema),
+        },
+        samples: item.samples,
+      })),
+      dependencies,
+      dataParameters: candidates.map(
+        ({ value: _value, ...metadata }) => metadata,
+      ),
+    };
+    if (job.planCompilerVersion === 2) {
+      const contract = job.authContract ?? {
+        headers: {},
+        availableContexts: [],
+      };
+      const preflightIssues = preflightHeaders(
+        selected,
+        contract.headers,
+        contract.availableContexts,
+        job.input.recording,
+      );
+      for (const ref of job.authContract?.missingInputRefs ?? [])
+        preflightIssues.push({
+          kind: "BLOCKING",
+          message: `前置 UI 缺少输入环境变量 ${ref}`,
+        });
+      if (!job.authProfileRef || !job.authContract)
+        preflightIssues.push({
+          kind: "BLOCKING",
+          message: "请先选择已配置的前置 UI 协议",
+        });
+      job.preflight = {
+        blockers: [...new Set(preflightIssues.map((issue) => issue.message))],
+        checkedAt: Date.now(),
+      };
+      if (job.preflight.blockers.length) {
+        job.state = "WAITING_CONFIGURATION";
+        await persist();
+        return job;
+      }
+      job.plan = await run("PLAN_DESIGN", async () => {
+        const intent = await call<CallIntent>(
           "PLAN_DESIGN",
           {
-            scenario: job.scenario,
-            testCase: job.testCase,
-            identity: { planVersion: job.input.planVersion },
-            environment: job.input.environment,
-            authProfileRef: job.authProfileRef ?? "NEEDS_CONFIGURATION",
-            authContract: job.authContract ?? {
-              availableContexts: [],
-              headers: {},
-            },
-            interfaces: selected.map((item) => ({
-              ...interfaceSummary(item),
-              asset: {
-                ...item.asset,
-                sources: item.samples.map((sample) => sample.requestId),
-                requestSchema: compact(item.asset.requestSchema),
-                responseSchema: compact(item.asset.responseSchema),
-              },
+            planProtocol: "CALL_INTENT_V2",
+            scenario: planPayload.scenario,
+            testCase: planPayload.testCase,
+            interfaces: planPayload.interfaces.map((item) => ({
+              ...interfaceSummary(
+                selected.find((selected) => selected.apiId === item.apiId)!,
+              ),
               samples: item.samples,
+              requestSchema: item.asset.requestSchema,
+              responseSchema: item.asset.responseSchema,
             })),
             dependencies,
-            dataParameters: candidates.map(
-              ({ value: _value, ...metadata }) => metadata,
-            ),
+            dataParameters: planPayload.dataParameters,
           },
           stageFor("PLAN_DESIGN"),
-          (plan) => {
-            validatePlanData(normalize(plan), candidates);
-            if (plan.steps.some((s) => !job.selectedApiIds!.includes(s.apiId)))
-              throw new Error("调用计划引用了用户未选择的接口");
+          (output) => {
+            compileCallIntent(output, {
+              recording: job.input.recording,
+              catalog: selected,
+              testCase: job.testCase!,
+              environment: job.input.environment,
+              authProfileRef: job.authProfileRef!,
+              planId: `${job.id}-plan`,
+              version: job.input.planVersion,
+              provider: job.provider,
+              generatedAt: stageFor("PLAN_DESIGN").startedAt ?? Date.now(),
+              authHeaders: contract.headers,
+            });
           },
+        );
+        job.callIntent = callIntentSchema.parse(intent);
+        const output = compileCallIntent(intent, {
+          recording: job.input.recording,
+          catalog: selected,
+          testCase: job.testCase!,
+          environment: job.input.environment,
+          authProfileRef: job.authProfileRef!,
+          planId: `${job.id}-plan`,
+          version: job.input.planVersion,
+          provider: job.provider,
+          generatedAt: stageFor("PLAN_DESIGN").startedAt ?? Date.now(),
+          authHeaders: contract.headers,
+        });
+        job.compilerIssues = output.issues;
+        return normalize(output.plan);
+      });
+    } else {
+      job.plan = await run("PLAN_DESIGN", async () =>
+        normalize(
+          await call<z.infer<typeof planSchema>>(
+            "PLAN_DESIGN",
+            planPayload,
+            stageFor("PLAN_DESIGN"),
+            (plan) => {
+              validatePlanData(normalize(plan), candidates);
+              if (
+                plan.steps.some((s) => !job.selectedApiIds!.includes(s.apiId))
+              )
+                throw new Error("调用计划引用了用户未选择的接口");
+            },
+          ),
         ),
-      ),
-    );
+      );
+    }
     // Rehydrate on-demand data references when resuming a saved plan stage.
     job.plan = normalize(job.plan);
     const inspect = () => {
@@ -648,7 +766,17 @@ export async function executePipeline(
         selected.map((item) => item.asset),
         job.input.environment,
       );
+      const missingAuthHeaders = new Map<string, string[]>();
       for (const node of job.plan!.steps) {
+        for (const [name, binding] of Object.entries(node.headers))
+          if (
+            binding.source === "MANUAL_REVIEW" &&
+            /authorization|csrf|token|secret|signature|api.?key/i.test(name)
+          )
+            missingAuthHeaders.set(name, [
+              ...(missingAuthHeaders.get(name) ?? []),
+              node.id,
+            ]);
         for (const binding of [
           ...Object.values(node.path),
           ...Object.values(node.query),
@@ -664,6 +792,10 @@ export async function executePipeline(
               `Unknown authentication context ${binding.name} in ${node.id}`,
             );
       }
+      for (const [name, steps] of missingAuthHeaders)
+        errors.push(
+          `认证 Header ${name} 缺少已配置来源（步骤 ${steps.join(", ")}）；请在前置 UI 协议中配置提取及 Header 绑定，或提供明确的上游响应绑定`,
+        );
       for (const step of job.testCase!.steps.filter(
         (s) => !s.executionKind || s.executionKind === "API",
       ))
@@ -706,12 +838,17 @@ export async function executePipeline(
       } catch (error) {
         errors.push(String(error));
       }
+      for (const issue of job.compilerIssues ?? [])
+        errors.push(
+          `${issue.kind === "REVIEW" ? "编译待审核" : "编译阻塞"}：${issue.message}`,
+        );
       const unique = [...new Set(errors)];
       const reviewRequired = unique.filter(
         (e) =>
           e.startsWith("Unvalidated API Asset") ||
           e === "Unresolved header" ||
-          e.startsWith("测试数据待审核："),
+          e.startsWith("测试数据待审核：") ||
+          e.startsWith("编译待审核："),
       );
       return {
         errors: unique,
@@ -720,13 +857,18 @@ export async function executePipeline(
       };
     };
     job.validation = await run("VALIDATION", async () => inspect());
-    if (job.validation.blockingErrors.length) {
+    const repairableErrors = job.validation.blockingErrors.filter(
+      (error) =>
+        !error.startsWith("认证 Header ") &&
+        error !== "请选择已配置的 UI 认证协议",
+    );
+    if (repairableErrors.length && job.planCompilerVersion !== 2) {
       try {
         const patches = await run("PLAN_REPAIR", async () => {
           const badIds = new Set(
             job
               .plan!.steps.filter((s) =>
-                job.validation!.blockingErrors.some((e) => e.includes(s.id)),
+                repairableErrors.some((e) => e.includes(s.id)),
               )
               .map((s) => s.id),
           );
@@ -745,7 +887,7 @@ export async function executePipeline(
           return call<z.infer<typeof taskSchemas.PLAN_REPAIR>>(
             "PLAN_REPAIR",
             {
-              errors: job.validation!.blockingErrors,
+              errors: repairableErrors,
               nodes,
               interfaces: selected.map((item) => ({
                 apiId: item.apiId,
@@ -794,6 +936,11 @@ export async function executePipeline(
     } else
       for (const id of ["PLAN_REPAIR", "FINAL_VALIDATION"])
         stageFor(id).state = "SKIPPED";
+    if (!repairableErrors.length && job.validation.blockingErrors.length)
+      stageFor("PLAN_REPAIR").output = {
+        reason:
+          "仅缺少认证配置，模型不能补出真实来源；请配置前置 UI 协议后重新生成计划",
+      };
     job.state = "NEEDS_REVIEW";
     await persist();
     return job;

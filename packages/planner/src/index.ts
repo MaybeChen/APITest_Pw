@@ -1,6 +1,6 @@
 import {
   taskMessages,
-  taskSchemas,
+  taskOutputSchema,
   normalizeTaskOutput,
   estimateTokens,
   type PipelineTask,
@@ -113,6 +113,26 @@ export class MockAIProvider implements AIProvider {
         planVersions: [data.identity.planVersion],
         status: "DRAFT",
       };
+    if (task === "PLAN_DESIGN" && data.planProtocol === "CALL_INTENT_V2") {
+      const apiSteps = data.testCase.steps.filter(
+        (step: any) => !step.executionKind || step.executionKind === "API",
+      );
+      return {
+        calls: apiSteps.map((step: any, index: number) => ({
+          id: `api-${index + 1}`,
+          semanticStepRef: step.id,
+          apiId:
+            data.interfaces[Math.min(index, data.interfaces.length - 1)].apiId,
+          requestId:
+            data.interfaces[Math.min(index, data.interfaces.length - 1)]
+              .samples[0]?.requestId,
+          dependsOn: [],
+          inputs: [],
+          checks: [],
+        })),
+        uncertainties: ["Mock 仅映射录制默认值，请确认场景预期"],
+      };
+    }
     if (task === "PLAN_REPAIR")
       return { replacements: [], reason: "Mock 不自动修复，请人工审核" };
     const input: PlannerInput = {
@@ -371,7 +391,7 @@ export class ModelAIProvider implements AIProvider {
       this.planningLimits.maxOutputTokens,
     );
     const fence = content.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    return taskSchemas[task].parse(
+    return taskOutputSchema(task, payload).parse(
       normalizeTaskOutput(task, JSON.parse(fence ? fence[1] : content)),
     );
   }

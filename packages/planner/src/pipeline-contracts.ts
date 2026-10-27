@@ -1,3 +1,4 @@
+import { callIntentSchema, intentInstructions } from "./call-intent.js";
 import { z } from "zod";
 import {
   assetSchema,
@@ -75,6 +76,16 @@ export const batchSchema = z.object({
 });
 export const pipelineFields = {
   pipelineVersion: z.literal(2).optional(),
+  planCompilerVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+  callIntent: callIntentSchema.optional(),
+  compilerIssues: z
+    .array(
+      z.object({ kind: z.enum(["BLOCKING", "REVIEW"]), message: z.string() }),
+    )
+    .optional(),
+  preflight: z
+    .object({ blockers: z.array(z.string()), checkedAt: z.number() })
+    .optional(),
   catalogSourceGenerationId: z.string().optional(),
   scenario: z.string().optional(),
   authProfileRef: z.string().optional(),
@@ -82,6 +93,7 @@ export const pipelineFields = {
     .object({
       availableContexts: z.array(z.string()),
       headers: z.record(z.string(), binding),
+      missingInputRefs: z.array(z.string()).optional(),
     })
     .optional(),
   catalog: z.array(catalogInterfaceSchema).optional(),
@@ -195,16 +207,27 @@ export const taskInstructions: Record<PipelineTask, string> = {
     "仅修复给出的局部执行节点和校验错误，返回 replacements 中被修改的既有节点；不得创建未知 ID、增加接口、改 Case、参数声明、环境权限或认证配置。必须保留业务语义、资源归属和清理策略。断言未使用测试数据预期值时省略 dataRef，禁止填空字符串。无请求体时省略 body；body 必须是 Binding 对象，不能为 null。修复时 bodyBindings 仅支持 $、$.field、$[0].field 形式；kind=status 只能用 eq 比较 100..599 的整数，业务 code 必须用 kind=json。AUTH_CONTEXT.name 必须存在于 authContract.availableContexts，不得将 Header 名当变量名；如果缺少来源应保留待审核并说明配置缺失，不得猜测或静默删除必要认证头。无法修复时返回空 replacements 与原因。",
 };
 const planOutputRules =
-  "可选字段没有值时省略，不要输出 null 或空字符串；resourceVariable 仅在资源归属/清理关联需要时填写。断言 basis 只能是 CONTRACT（实际契约）、RECORDING（采集证据）、USER（用户明确预期）或 INFERRED（模型推断/依据未确定），不得编造其他枚举。依据不明使用 INFERRED，confirmed=false，人工审核后才能执行。";
+  "extract 和断言 path 仅支持 $.field、$.items[0].name 等普通字段/数字下标，不支持 [*]、[?()]、递归或其他 JSONPath 语法，不能编造运行器不支持的表达式。用户确认的业务操作（包括创建、修改、保存和查询）使用 API phase；SETUP 仅用于业务开始前的数据准备，不能依赖 API 节点。cleanupPolicy=ALWAYS 仅表示始终执行已声明的清理，不代表必须生成清理节点。仅在确有本次创建的临时资源、可用的已选清理接口和资源 ID 提取时才添加 SETUP/CLEANUP；不要为了满足该策略编造清理接口、语义步骤或资源归属。所有节点的 semanticStepRef 必须引用已确认用例中的 API 步骤 ID，清理也必须关联已有业务步骤，禁止新造 cleanup 语义 ID。缺少真实资源提取或清理来源时明确报告，不能删除所有权校验以放行。可选字段没有值时省略，不要输出 null 或空字符串；resourceVariable 仅在资源归属/清理关联需要时填写。断言 basis 只能是 CONTRACT（实际契约）、RECORDING（采集证据）、USER（用户明确预期）或 INFERRED（模型推断/依据未确定），不得编造其他枚举。依据不明使用 INFERRED，confirmed=false，人工审核后才能执行。";
 // UTF-8 byte count is a deliberately conservative token proxy; not model usage.
 export function estimateTokens(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "null", "utf8");
 }
+export function taskOutputSchema(task: PipelineTask, payload: unknown) {
+  return task === "PLAN_DESIGN" &&
+    (payload as { planProtocol?: string } | null)?.planProtocol ===
+      "CALL_INTENT_V2"
+    ? callIntentSchema
+    : taskSchemas[task];
+}
 export function taskMessages(task: PipelineTask, payload: unknown) {
+  const intent =
+    task === "PLAN_DESIGN" &&
+    (payload as { planProtocol?: string } | null)?.planProtocol ===
+      "CALL_INTENT_V2";
   return [
     {
       role: "system",
-      content: `你是 API 测试规划助手。使用中文，只输出 JSON。${taskInstructions[task]} ${task === "PLAN_DESIGN" || task === "PLAN_REPAIR" ? planOutputRules : ""} 输出 Schema：${JSON.stringify(z.toJSONSchema(taskSchemas[task]))}`,
+      content: `你是 API 测试规划助手。使用中文，只输出 JSON。${intent ? intentInstructions : taskInstructions[task]} ${!intent && (task === "PLAN_DESIGN" || task === "PLAN_REPAIR") ? planOutputRules : ""} 输出 Schema：${JSON.stringify(z.toJSONSchema(taskOutputSchema(task, payload)))}`,
     },
     { role: "user", content: JSON.stringify(payload) },
   ];

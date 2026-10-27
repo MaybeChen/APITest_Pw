@@ -185,3 +185,54 @@ it("identifies the exact nodes and paths for plan body and status repair", () =>
     ),
   ).toBe(true);
 });
+
+it("rejects wildcard/filter paths and unowned cleanup writes before execution", () => {
+  const b = demoArtifacts();
+  const step = b.plan.steps[0];
+  step.extract = { names: "$.data.list[*].name" };
+  step.assertions = [
+    {
+      kind: "json",
+      path: "$.data.list[?(@.name == 'test_param_unique')].default",
+      operator: "exists",
+      basis: "INFERRED",
+      confirmed: false,
+    },
+  ];
+  const cleanup = b.plan.steps.at(-1)!;
+  cleanup.apiId = step.apiId; // A save/create endpoint is not an owned delete operation.
+  cleanup.requiresOwnership = false;
+  const errors = validate(b.testCase, b.plan, b.assets, demoEnv);
+  expect(
+    errors.some(
+      (e) =>
+        e.includes("Unsupported JSON path") &&
+        e.includes(`step ${step.id}, extract path`),
+    ),
+  ).toBe(true);
+  expect(
+    errors.some(
+      (e) =>
+        e.includes("Unsupported JSON path") &&
+        e.includes(`step ${step.id}, assertion path`),
+    ),
+  ).toBe(true);
+  expect(
+    errors.some((e) =>
+      e.includes(`Cleanup write requires run ownership in step ${cleanup.id}`),
+    ),
+  ).toBe(true);
+});
+
+it("matches typed array objects without treating missing or non-array values as successful negative checks", async () => {
+  const { jsonArrayContains } = await import("../../packages/core/src/index");
+  const rows = [{ name: "test", defaults: { value: 20 }, extra: true }];
+  expect(
+    jsonArrayContains(rows, { name: "test", defaults: { value: 20 } }),
+  ).toBe(true);
+  expect(
+    jsonArrayContains(rows, { name: "test", defaults: { value: "20" } }),
+  ).toBe(false);
+  expect(jsonArrayContains(rows, { name: "missing" })).toBe(false);
+  expect(jsonArrayContains(undefined, { name: "test" })).toBe(false);
+});

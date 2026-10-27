@@ -1,3 +1,4 @@
+import type { AuthProfile } from "../../../../packages/contracts/src/index";
 import { PipelineReview, ScenarioFork } from "./PipelineReview";
 import { useEffect, useState } from "react";
 import type { Generation } from "../../../../packages/planner/src/workflow";
@@ -9,6 +10,7 @@ const labels: Record<string, string> = {
   PLAN_REPAIR: "局部修复调用节点",
   WAITING_INTERFACE_REVIEW: "等待用户确认接口",
   WAITING_CASE_REVIEW: "等待用户确认用例",
+  WAITING_CONFIGURATION: "等待补充前置配置",
   EVIDENCE: "整理录制证据",
   BUSINESS_FLOW: "识别业务流程",
   SEMANTIC_CASE: "生成业务用例",
@@ -45,6 +47,22 @@ export function GenerationProgress({
   const [selectedId, setSelectedId] = useState(generationId ?? "");
   const [error, setError] = useState("");
   const [resuming, setResuming] = useState<string>();
+  const [profiles, setProfiles] = useState<AuthProfile[]>([]);
+  const [authChoices, setAuthChoices] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/auth-profiles")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as AuthProfile[];
+        if (!cancelled) setProfiles(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [recordingId]);
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -104,7 +122,10 @@ export function GenerationProgress({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ revision: job.revision }),
+          body: JSON.stringify({
+            revision: job.revision,
+            authProfileRef: authChoices[job.id] || job.authProfileRef,
+          }),
         },
       );
       if (!response.ok) throw new Error(await response.text());
@@ -217,9 +238,11 @@ export function GenerationProgress({
                 </p>
               )}
               {job.pipelineVersion === 2 &&
-                ["WAITING_INTERFACE_REVIEW", "WAITING_CASE_REVIEW"].includes(
-                  job.state,
-                ) && (
+                [
+                  "WAITING_INTERFACE_REVIEW",
+                  "WAITING_CASE_REVIEW",
+                  "WAITING_CONFIGURATION",
+                ].includes(job.state) && (
                   <PipelineReview
                     key={`${job.id}:${job.state}`}
                     job={job}
@@ -278,6 +301,63 @@ export function GenerationProgress({
                   ))}
                 </details>
               )}
+              {job.planCompilerVersion === 2 && job.caseConfirmed && (
+                <section>
+                  <h4>调用计划编译</h4>
+                  <p>
+                    模型仅生成调用意图；本地编译器沿用录制请求，组装参数、Header、依赖和执行策略。配置检查不等于已验证登录或接口执行。
+                  </p>
+                  {job.preflight && (
+                    <p>
+                      生成前配置检查：
+                      {job.preflight.blockers.length ? "待补充" : "通过"}
+                    </p>
+                  )}
+                  {job.preflight?.blockers.map((message) => (
+                    <p className="error" key={message}>
+                      {message}
+                    </p>
+                  ))}
+                  <label>
+                    计划前置 UI 协议
+                    <select
+                      value={authChoices[job.id] ?? job.authProfileRef ?? ""}
+                      disabled={job.active !== false || resuming === job.id}
+                      onChange={(event) =>
+                        setAuthChoices((all) => ({
+                          ...all,
+                          [job.id]: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">请选择前置 UI 协议</option>
+                      {profiles
+                        .filter(
+                          (profile) =>
+                            !profile.environmentRef ||
+                            profile.environmentRef === job.input.environment.id,
+                        )
+                        .map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.id}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  {job.state === "WAITING_CONFIGURATION" && (
+                    <p>
+                      补充前置 UI
+                      配置后，选择对应协议并点击“重新生成计划”，会保留已确认的接口和用例。
+                    </p>
+                  )}
+                  {job.callIntent && (
+                    <details>
+                      <summary>查看模型调用意图</summary>
+                      <pre>{JSON.stringify(job.callIntent, null, 2)}</pre>
+                    </details>
+                  )}
+                </section>
+              )}
               <ol className="generation-stages">
                 {job.stages.map((stage) => (
                   <li
@@ -325,6 +405,15 @@ export function GenerationProgress({
                   </li>
                 ))}
               </ol>
+              {job.planCompilerVersion === 2 &&
+                job.state === "NEEDS_REVIEW" &&
+                job.validation && (
+                  <p role="status">
+                    {job.validation.blockingErrors.length
+                      ? `计划待补充：还有 ${job.validation.blockingErrors.length} 项执行条件未满足。`
+                      : "计划结构检查通过，等待审核数据和预期；尚未验证实际回放。"}
+                  </p>
+                )}
               {job.validation && (
                 <details open={job.validation.errors.length > 0}>
                   <summary>

@@ -50,7 +50,7 @@ allowedOrigins 支持精确 origin 字符串和 hostnameRegex 对象规则，任
 
 ## 分阶段生成、页面证据与执行 DAG
 
-新版任务（pipelineVersion=2）使用 API_ORGANIZATION → API_SELECTION → 人工确认接口 → CASE_DESIGN → 人工确认用例 → PLAN_DESIGN → VALIDATION；有阻塞错误时可进入 PLAN_REPAIR → FINAL_VALIDATION。接口整理按数量及输入预算分批，超大目录的场景筛选也分批。旧版任务仍使用 EVIDENCE → BUSINESS_FLOW → SEMANTIC_CASE → EXECUTION_PLAN。每个阶段保存独立状态、输出和尝试次数。恢复任务复用成功产物，不重复全部模型调用。模型调用日志携带 stage 和 generationId。修复不改变环境权限，所有产物均为待审核草稿；无法修复的错误保留在校验结果中。
+新版任务（pipelineVersion=2、planCompilerVersion=2）使用 API_ORGANIZATION → API_SELECTION → 人工确认接口 → CASE_DESIGN → 人工确认用例 → 前置配置检查 → PLAN_DESIGN（调用意图 + 本地编译）→ VALIDATION。新编译器不让模型直接修补执行 Plan；编译阻塞保留在产物中等待补充事实。旧的 planCompilerVersion 缺省/1 任务继续使用完整 Plan 协议及 PLAN_REPAIR → FINAL_VALIDATION。接口整理按数量及输入预算分批，超大目录的场景筛选也分批。旧版任务仍使用 EVIDENCE → BUSINESS_FLOW → SEMANTIC_CASE → EXECUTION_PLAN。每个阶段保存独立状态、输出和尝试次数。恢复任务复用成功产物，不重复全部模型调用。模型调用日志携带 stage 和 generationId。修复不改变环境权限，所有产物均为待审核草稿；无法修复的错误保留在校验结果中。
 
 录制在 click/change/submit 前、及操作后约 200ms 保存页面语义摘要：标题、可见标题、附近表单/区域、最多 24 个控件的标签与状态。最多 1000 份摘要、合计 2MiB；不采集输入值，不保存完整 DOM 或截图。请求与摘要通过操作候选关联，仍是 1.5 秒窗口、置信度 0.4 的待确认关联，不能证明因果。参数候选使用前序响应的嵌套 ID 字段与后续路径段、Query、嵌套 Body 的精确值匹配，禁止子串匹配；业务依赖仍需人工确认。
 
@@ -64,7 +64,7 @@ RESPONSE_VARIABLE 可声明 `fromStep`、`expectedType`，生产节点通过 `ex
 
 接口资产由采集事实构建，模型只填写名称、描述和不确定项，不能改写 Header/入参/出参事实。每批接口只包含最多 3 种代表请求形态、最多 2 份候选 DOM 摘要以及对应操作；样例按数组、字符串、深度和字段数限制压缩，原始录制仍完整保留。采集样例不是正式契约。每批必须原样、唯一地返回该批所有接口 ID。
 
-API_SELECTION 仅发送场景和接口 ID、名称、描述、method/path、操作类型。CASE_DESIGN 仅发送用户选择的接口摘要、场景和身份信息，不发送全部 DOM/响应。PLAN_DESIGN 仅发送已确认用例、所选接口结构/压缩样例、相关候选依赖和有采集来源的数据参数目录。身份、版本、环境、认证引用和草稿状态由程序固定。调用计划另接收已配置认证协议的可用上下文名称和 Header 绑定，不读取凭证值；引用未提供的认证上下文会产生阻塞错误。
+API_SELECTION 仅发送场景和接口 ID、名称、描述、method/path、操作类型。CASE_DESIGN 仅发送用户选择的接口摘要、场景和身份信息，不发送全部 DOM/响应。PLAN_DESIGN 仅发送已确认用例、所选接口结构/压缩样例、相关候选依赖和有采集来源的数据参数目录。身份、版本、环境、认证引用和草稿状态由程序固定。新版调用意图只接收已确认用例、所选接口/压缩样例和数据目录，不把认证协议、执行环境权限或 Plan 输出 Schema交给模型。认证 Header 由本地编译器和前置 UI 协议组装，真实凭证值不进入模型输入。
 
 WAITING_INTERFACE_REVIEW / WAITING_CASE_REVIEW 为持久化状态。确认接口必须为当前目录中的非空唯一集合；取消候选参数依赖的来源接口时需明确确认。确认用例必须校验身份、版本、工作区和依赖 DAG；UI/人工前置条件不强制生成 API 节点，但其中的 API 上游依赖仍需落实。确认请求检查 revision，并拒绝活动任务的并发修改。resume 不会绕过确认点。
 
@@ -87,3 +87,19 @@ WAITING_INTERFACE_REVIEW / WAITING_CASE_REVIEW 为持久化状态。确认接口
 无法匹配录制的安全新值标为模型建议；无值的声明引用和敏感占位符标为缺少值。它们产生 reviewRequired，不触发重跑模型或局部修复。dataProposals 保存任务内候选值以支持重启恢复，重新生成计划时清除。候选数据不自动批准。
 
 新版生成计划标记 dataPolicy=REVIEW_REQUIRED。Dataset.review 包含 confirmed 及参数来源 sources；编辑数据后需重新确认，修改值标记为 USER。运行入口和单行执行器都在启动浏览器前检查审核标记、完整值、类型及来源；不能通过直接单次执行 API 跳过审核。已保存数据集不可覆盖，修改应复制或新建版本重新确认。旧版未使用该策略的计划保持兼容。
+
+接口目录的模型描述可复用，但执行前按当前规则从录制刷新 Header 等事实，避免旧缓存中的字段名推断继续传播。计划编译器对非独立只读 GET/HEAD 强制关闭 parallelSafe，对写操作将自动重试设为 0；不通过改写资源归属或删除清理节点来消除语义错误。只有认证配置缺失时跳过模型修复，明确提示配置来源；阶段依赖、资源 ID 提取、临时资源清理和语义步骤引用仍需通过完整校验。cleanupPolicy=ALWAYS 表示已有清理节点始终执行，并不要求所有场景都创建临时资源和清理节点。
+
+Header 绑定由统一的采集规则构造：Cookie/Host 等客户端字段使用 CLIENT_MANAGED，安全的 Content-Type/Origin/Referer 保留采集值；不接受模型在未采集字段上发明绑定。响应提取和 JSON 断言仅支持普通字段及数字数组下标，不支持通配符、过滤器或递归 JSONPath，校验会携带步骤/路径报错，不再到执行时静默返回 undefined。CLEANUP 中的写操作必须启用本次运行资源所有权验证，即使接口的 HTTP 方法是 POST，也不能通过假设 action=delete 绕过保护。
+
+## 调用意图协议与确定性编译器
+
+新创建任务标记 planCompilerVersion=2；重新生成旧任务也会升级，新旧产物仍属于原录制记录。模型 PLAN_DESIGN 仅返回严格的 `{calls,uncertainties}`：每个调用给出 id、semanticStepRef、apiId、可选录制 requestId、依赖、输入差异及断言意图。输入来源仅有 VALUE / RECORDING / RESPONSE；不能输出 phase、headers、资源变量、并发、超时、重试、身份、环境或认证字段。调用意图单独保存在 generation.callIntent，可在界面查看。
+
+编译器从该接口完整录制中构造默认 Path/Query/Body/Header；模型仅覆盖明确的场景差异，避免重建整份请求体。Case 的语义依赖自动补齐，包括经 UI/人工前置条件的 API 祖先；未知接口、语义 ID、来源请求、循环依赖都不能编译。响应绑定需字段和实际采集参数流转证据，变量名及类型由程序生成。身份、时间、执行并发上限、只读并行资格、资源锁、零写重试和 API 阶段由程序设定。
+
+配置检查先于计划模型调用：缺少认证 Header 来源或 UI 输入环境变量时进入 WAITING_CONFIGURATION，不消耗计划模型调用。界面保留已确认用例，可选择其他前置 UI 协议并重新生成。该检查只验证配置，不宣称已经完成登录或真实接口回放。
+
+只有已选 DELETE 能力、已映射的创建调用、录制创建响应与删除目标相符且有实际响应提取，才会编译本次资源所有权和兜底清理。业务删除保持 API 节点，附加 CLEANUP 节点 onlyIfOwned=true；运行器仅在该资源已登记且未清理时执行兜底操作，创建失败或已经成功删除时不重复请求。禁止把 save/action=delete 的猜测变成清理。没有依据的删除会留下编译阻塞，而非放宽所有权保护。
+
+Plan.compilation.blockers 随产物保存，approve/run 的公共校验也会检查，不能仅靠点击“人工确认”忽略。JSON 路径仍只支持字段和数字下标；数组检查使用 contains/notContains 与结构化预期对象，字段需有录制依据，执行按对象子集和严格值类型匹配，非数组/缺少响应不会被判成成功的否定断言。语法及字段依据正确不等于业务预期已经确认；所有生成断言、模型新数据仍需审核。最终成功以真实执行报告为准。

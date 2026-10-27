@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { RE2JS } from "re2js";
 import { randomUUID } from "node:crypto";
 import {
@@ -51,8 +52,49 @@ export function redact(value: unknown, key = ""): any {
   }
   return value;
 }
+export function observedHeaderBinding(name: string, value: string): Binding {
+  if (
+    /^(cookie|host|content-length|user-agent|accept(?:-.*)?|sec-.*|connection)$/i.test(
+      name,
+    )
+  )
+    return { source: "CLIENT_MANAGED" };
+  if (
+    sensitive.test(name) ||
+    redact(value, name) !== value ||
+    value.includes("[REDACTED]")
+  )
+    return { source: "MANUAL_REVIEW" };
+  return { source: "STATIC", value };
+}
+export function jsonArrayContains(actual: unknown, expected: unknown): boolean {
+  const match = (value: unknown, pattern: unknown): boolean => {
+    if (pattern && typeof pattern === "object" && !Array.isArray(pattern))
+      return (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.entries(pattern).every(
+          ([key, child]) =>
+            Object.hasOwn(value, key) &&
+            match((value as Record<string, unknown>)[key], child),
+        )
+      );
+    return isDeepStrictEqual(value, pattern);
+  };
+  return (
+    Array.isArray(actual) &&
+    expected !== undefined &&
+    actual.some((value) => match(value, expected))
+  );
+}
 export function atPath(value: unknown, path: string): unknown {
   if (!path || path === "$") return value;
+  const normalized = path.startsWith("$") ? path : `$.${path}`;
+  if (!/^\$(?:\.[A-Za-z_][\w-]*|\[\d+\])+$/.test(normalized))
+    throw new Error(
+      "Unsupported JSON path: only fields and numeric array indexes are supported; wildcards and filters are not supported",
+    );
   const parts = path
     .replace(/^\$\.?/, "")
     .replace(/\[(\d+)\]/g, ".$1")
@@ -238,6 +280,8 @@ export function validate(
   approved = false,
 ): string[] {
   const errors: string[] = [];
+  for (const message of p.compilation?.blockers ?? [])
+    errors.push(`编译阻塞：${message}`);
   try {
     caseSchema.parse(c);
     planSchema.parse(p);
@@ -291,6 +335,13 @@ export function validate(
       producers.set(name, s.id);
     }
   for (const s of p.steps) {
+    if (
+      s.onlyIfOwned &&
+      (s.phase !== "CLEANUP" || !s.requiresOwnership || !s.resourceVariable)
+    )
+      errors.push(
+        `Conditional cleanup requires owned resource binding: ${s.id}`,
+      );
     const a = assets.find(
       (a) => a.apiId === s.apiId && a.version === (s.apiVersion ?? 1),
     );
@@ -316,6 +367,10 @@ export function validate(
       if (a.risk !== "READ" && s.retries) errors.push("Unsafe write retries");
       if (a.operationType === "DELETE" && !s.requiresOwnership)
         errors.push("Delete requires run ownership");
+      if (s.phase === "CLEANUP" && a.risk !== "READ" && !s.requiresOwnership)
+        errors.push(
+          `Cleanup write requires run ownership in step ${s.id}; an inferred action=delete on a save endpoint is not proof of ownership`,
+        );
       const params = [...a.pathTemplate.matchAll(/\{(\w+)\}/g)].map(
         (x) => x[1],
       );
@@ -334,7 +389,9 @@ export function validate(
       if (producer && s.phase !== "CLEANUP" && producer.phase === "CLEANUP")
         errors.push("Business steps cannot depend on cleanup");
       if (producer && s.phase === "SETUP" && producer.phase === "API")
-        errors.push("Setup cannot depend on business steps");
+        errors.push(
+          `Setup cannot depend on business steps: ${s.id} -> ${dep}; business actions belong in API phase`,
+        );
     }
     for (const b of [
       ...Object.values(s.path),
@@ -366,7 +423,9 @@ export function validate(
       try {
         atPath({}, path);
       } catch (error) {
-        errors.push(String(error));
+        errors.push(
+          `${String(error)} in step ${s.id}, extract path ${JSON.stringify(path)}`,
+        );
       }
     }
     for (const name of Object.keys(s.extractTypes ?? {}))
@@ -411,7 +470,8 @@ export function validate(
     for (const a of s.assertions) {
       if (
         a.dataRef &&
-        (!Object.hasOwn(p.parameters ?? {}, a.dataRef) || a.operator !== "eq")
+        (!Object.hasOwn(p.parameters ?? {}, a.dataRef) ||
+          !["eq", "contains", "notContains"].includes(a.operator))
       )
         errors.push(`Invalid assertion data parameter: ${a.dataRef}`);
       if (
@@ -434,6 +494,19 @@ export function validate(
         );
       if (
         a.kind === "json" &&
+        ["contains", "notContains"].includes(a.operator) &&
+        !a.dataRef &&
+        (a.value === undefined ||
+          (a.value !== null &&
+            typeof a.value === "object" &&
+            !Array.isArray(a.value) &&
+            !Object.keys(a.value).length))
+      )
+        errors.push(
+          `Array matching assertion requires a nonempty expected value in step ${s.id}`,
+        );
+      if (
+        a.kind === "json" &&
         a.operator === "eq" &&
         !a.dataRef &&
         a.value === undefined
@@ -444,7 +517,9 @@ export function validate(
       try {
         if (a.path) atPath({}, a.path);
       } catch (e) {
-        errors.push(String(e));
+        errors.push(
+          `${String(e)} in step ${s.id}, assertion path ${JSON.stringify(a.path)}`,
+        );
       }
       if (approved && !a.confirmed) errors.push("Assertion requires review");
     }
@@ -457,12 +532,16 @@ export function validate(
               b.source === "RESPONSE_VARIABLE" && b.name === s.resourceVariable,
           )))
     )
-      errors.push("Ownership binding required");
+      errors.push(
+        `Ownership binding required in step ${s.id}: bind the resource ID to an extracted variable created by this run`,
+      );
     if (
       s.ownsResource &&
       (!s.resourceVariable || !s.extract[s.resourceVariable])
     )
-      errors.push("Owned resource requires extraction");
+      errors.push(
+        `Owned resource requires extraction in step ${s.id}: resourceVariable must name an extract field`,
+      );
     if (
       s.phase === "SETUP" &&
       s.ownsResource &&
@@ -471,7 +550,9 @@ export function validate(
           x.phase === "CLEANUP" && x.resourceVariable === s.resourceVariable,
       )
     )
-      errors.push("Fixture requires cleanup");
+      errors.push(
+        `Fixture requires cleanup for step ${s.id}: provide a CLEANUP node using the same resourceVariable`,
+      );
   }
   return [...new Set(errors)];
 }

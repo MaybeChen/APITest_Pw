@@ -1046,3 +1046,84 @@ test("records, reviews and saves a reusable precondition UI profile from configu
     secretRef: "UI_INPUT_1",
   });
 });
+
+test("keeps confirmed case while prerequisite configuration is missing and switches the profile before compiling", async ({
+  page,
+  request,
+}) => {
+  const bundle = await (await request.post("/api/demo")).json();
+  const recording = {
+    id: "compiler-config-record",
+    caseName: "调用编译配置检查",
+    scenario: "查询",
+    target: "http://127.0.0.1:3100",
+    startedAt: Date.now(),
+    state: "STOPPED",
+    requests: [],
+    operations: [],
+  };
+  const job: any = {
+    id: "compiler-config-job",
+    revision: 10,
+    pipelineVersion: 2,
+    planCompilerVersion: 2,
+    state: "WAITING_CONFIGURATION",
+    active: false,
+    caseConfirmed: true,
+    selectionConfirmed: true,
+    authProfileRef: "demo-auth",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    provider: { name: "Test", version: "1" },
+    testCase: bundle.testCase,
+    input: { recording, assets: bundle.assets, environment: { id: "demo" } },
+    preflight: {
+      blockers: ["认证 Header x-page-token 缺少前置 UI 提取及 Header 绑定"],
+      checkedAt: Date.now(),
+    },
+    stages: [{ id: "PLAN_DESIGN", state: "PENDING", attempts: 0 }],
+  };
+  await page.route("**/api/recordings", (route) =>
+    route.fulfill({ json: [recording] }),
+  );
+  await page.route("**/api/generations*", (route) =>
+    route.fulfill({ json: [job] }),
+  );
+  await page.route("**/api/generations/compiler-config-job", (route) =>
+    route.fulfill({ json: job }),
+  );
+  await page.route("**/api/auth-profiles", (route) =>
+    route.fulfill({
+      json: [{ id: "demo-auth" }, { id: "real-ui", environmentRef: "demo" }],
+    }),
+  );
+  let submission: any;
+  await page.route(
+    "**/api/generations/compiler-config-job/regenerate-plan",
+    async (route) => {
+      submission = route.request().postDataJSON();
+      job.authProfileRef = submission.authProfileRef;
+      job.state = "RUNNING";
+      job.active = true;
+      await route.fulfill({ json: { id: job.id } });
+    },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
+  await page.getByRole("button", { name: "打开流程 调用编译配置检查" }).click();
+  await expect(
+    page.getByText("认证 Header x-page-token 缺少前置 UI 提取及 Header 绑定", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "打开草稿", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("计划前置 UI 协议").selectOption("real-ui");
+  await page.getByRole("button", { name: "重新生成计划", exact: true }).click();
+  await expect.poll(() => submission?.authProfileRef).toBe("real-ui");
+  expect(submission.revision).toBe(10);
+  await expect(
+    page.getByRole("button", { name: "重新生成计划", exact: true }),
+  ).toBeDisabled();
+});

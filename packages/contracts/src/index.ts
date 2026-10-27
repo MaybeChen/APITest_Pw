@@ -209,7 +209,7 @@ export const caseSchema = z.object({
 export const assertion = z.object({
   kind: z.enum(["status", "json"]),
   path: z.string().optional(),
-  operator: z.enum(["eq", "exists", "notExists"]),
+  operator: z.enum(["eq", "exists", "notExists", "contains", "notContains"]),
   value: z.unknown().optional(),
   dataRef: id.optional(),
   basis: z.enum(["CONTRACT", "RECORDING", "USER", "INFERRED"]),
@@ -240,6 +240,7 @@ export const stepSchema = z.object({
   ownsResource: z.boolean().default(false),
   resourceVariable: z.string().optional(),
   requiresOwnership: z.boolean().default(false),
+  onlyIfOwned: z.boolean().optional(),
 });
 export const dataOrigin = z.enum([
   "RECORDING",
@@ -267,6 +268,9 @@ export const planSchema = z.object({
   uiActions: z.array(action),
   steps: z.array(stepSchema).min(1),
   parameters: z.record(z.string(), valueType).optional(),
+  compilation: z
+    .object({ version: z.literal(2), blockers: z.array(z.string()) })
+    .optional(),
   dataPolicy: z.literal("REVIEW_REQUIRED").optional(),
   dataRequirements: z.record(z.string(), dataRequirementSchema).optional(),
   execution: z

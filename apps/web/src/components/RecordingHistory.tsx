@@ -51,6 +51,7 @@ export function RecordingHistory({
                           ? {
                               WAITING_INTERFACE_REVIEW: "待确认接口",
                               WAITING_CASE_REVIEW: "待确认用例",
+                              WAITING_CONFIGURATION: "待补充配置",
                               RUNNING: "生成中",
                               FAILED: "生成失败",
                               NEEDS_REVIEW: "待审核",
