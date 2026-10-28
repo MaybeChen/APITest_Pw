@@ -169,7 +169,9 @@ it("batches interface facts, includes only candidate context, and enforces both 
   expect(job.plan).toBeUndefined();
   expect(calls.at(-1)?.task).toBe("CASE_DESIGN");
   expect(calls.at(-1)?.input.interfaces).toHaveLength(1);
-  expect(JSON.stringify(calls.at(-1)?.input)).not.toContain("recorded-id");
+  expect(JSON.stringify(calls.at(-1)?.input)).toContain("recorded-id");
+  expect(calls.at(-1)?.input.interfaces[0].samples).toHaveLength(51);
+  expect(calls.at(-1)?.input.callSequence).toHaveLength(51);
   job.testCase!.steps[0].expected = "用户确认的业务预期";
   confirmCase(job, job.testCase);
   await executePipeline(job, model);
@@ -177,9 +179,9 @@ it("batches interface facts, includes only candidate context, and enforces both 
   const planCall = calls.find((c) => c.task === "PLAN_DESIGN")!;
   expect(planCall.input.testCase.steps[0].expected).toBe("用户确认的业务预期");
   expect(planCall.input.interfaces).toHaveLength(1);
-  expect(planCall.input.interfaces[0].asset.sources.length).toBeLessThanOrEqual(
-    3,
-  );
+  expect(planCall.input.interfaces[0].asset.sources).toHaveLength(51);
+  expect(planCall.input.interfaces[0].samples).toHaveLength(51);
+  expect(planCall.input.callSequence).toHaveLength(51);
   expect(job.catalog![0].asset.sources).toHaveLength(51);
   expect(planCall.input.recording).toBeUndefined();
   expect(job.testCase!.steps[0].review).toBe("CONFIRMED");
@@ -1040,4 +1042,175 @@ it("enforces conservative write execution and refreshes guessed authentication i
   expect(
     job.validation!.errors.some((e) => e.includes("Unsafe parallel")),
   ).toBe(false);
+});
+
+it.each([1, 2] as const)(
+  "passes every selected call and unabridged bodies to case and plan design (compiler v%s)",
+  async (compilerVersion) => {
+    const { model, calls } = provider();
+    const r = structuredClone(recording);
+    delete r.requests[0].headers.authorization;
+    r.requests[0].headers["x-custom-info"] = "header-value-".repeat(60);
+    r.requests[0].body = {
+      name: "recorded-topic",
+      long: "long-value-".repeat(100),
+      entries: Array.from({ length: 8 }, (_, i) => ({
+        index: i,
+        value: `entry-${i}`,
+      })),
+      ...Object.fromEntries(
+        Array.from({ length: 40 }, (_, i) => [`field_${i}`, i]),
+      ),
+    };
+    const deep = {
+      one: {
+        two: { three: { four: { five: { six: { seven: "deep-response" } } } } },
+      },
+    };
+    r.requests[0].response = {
+      id: "recorded-id",
+      deep,
+      csrf_token: "must-not-reach-model",
+      items: Array.from({ length: 8 }, (_, i) => ({ id: `item-${i}` })),
+    };
+    for (let i = 0; i < 5; i++)
+      r.requests.push({
+        ...structuredClone(r.requests[0]),
+        id: `repeated-call-${i}`,
+        startedAt: i + 3,
+        body: {
+          ...(r.requests[0].body as object),
+          name: `different-value-${i}`,
+        },
+        status: i === 4 ? 500 : 201,
+        response: {
+          id: `response-${i}`,
+          deep,
+          items: Array.from({ length: 8 }, (_, n) => ({
+            id: `item-${i}-${n}`,
+          })),
+        },
+      });
+    r.requests.push({
+      ...structuredClone(r.requests[1]),
+      id: "unselected-call",
+      url: demoEnv.baseURL + "/api/unselected",
+      response: { marker: "UNSELECTED_RESPONSE" },
+    });
+    const job = createCurrentPipeline(
+      { recording: r, assets: [], environment: demoEnv },
+      model,
+    );
+    job.planCompilerVersion = compilerVersion;
+    job.authContract = { headers: {}, availableContexts: [] };
+    await executePipeline(job, model);
+    confirmInterfaces(
+      job,
+      job
+        .catalog!.filter((i) => !i.apiId.includes("unselected"))
+        .map((i) => i.apiId),
+      "创建并查询主题",
+    );
+    await executePipeline(job, model);
+    expect(job.state, job.error).toBe("WAITING_CASE_REVIEW");
+    confirmCase(job, job.testCase);
+    await executePipeline(job, model);
+    expect(job.state, job.error).toBe("NEEDS_REVIEW");
+    const { redact } = await import("../../packages/core/src/index");
+    for (const task of ["CASE_DESIGN", "PLAN_DESIGN"]) {
+      const payload = calls.find((c) => c.task === task)!.input;
+      expect(payload.evidenceScope.totalCalls).toBe(7);
+      expect(
+        payload.callSequence.map((c: { requestId: string }) => c.requestId),
+      ).toEqual(r.requests.slice(0, -1).map((request) => request.id));
+      const topic = payload.interfaces.find(
+        (i: { apiId: string }) => i.apiId === "POST:/api/topics",
+      );
+      expect(topic.samples).toHaveLength(6);
+      for (const sample of topic.samples) {
+        const original = job.input.recording.requests.find(
+          (request) => request.id === sample.requestId,
+        )!;
+        expect(sample).toMatchObject(redact(original));
+      }
+      expect(topic.samples[0].body.long).toHaveLength(1100);
+      expect(topic.samples[0].body.entries).toHaveLength(8);
+      expect(topic.samples[0].body.field_39).toBe(39);
+      expect(topic.samples[0].response.deep).toEqual(deep);
+      expect(topic.samples[0].response.items).toHaveLength(8);
+      expect(topic.samples[0].response.csrf_token).toBe("[REDACTED]");
+      expect(topic.samples[5].status).toBe(500);
+      expect(JSON.stringify(payload)).not.toContain("UNSELECTED_RESPONSE");
+      expect(JSON.stringify(payload)).not.toContain("must-not-reach-model");
+    }
+  },
+);
+
+it("rejects oversized complete response evidence before case design without silently shortening it", async () => {
+  const { model, calls } = provider();
+  const r = structuredClone(recording);
+  r.requests[0].response = { id: "recorded-id", large: "x".repeat(70000) };
+  const job = createCurrentPipeline(
+    { recording: r, assets: [], environment: demoEnv },
+    model,
+  );
+  await executePipeline(job, model);
+  expect(job.state).toBe("WAITING_INTERFACE_REVIEW");
+  confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+  const count = calls.length;
+  await executePipeline(job, model);
+  expect(job.state).toBe("FAILED");
+  expect(job.error).toContain("CASE_DESIGN");
+  expect(job.error).toContain("超过预算");
+  expect(calls).toHaveLength(count);
+  expect(
+    (job.input.recording.requests[0].response as { large: string }).large,
+  ).toHaveLength(70000);
+});
+
+it("preserves all selected request-level dependencies and explicitly marks missing response bodies", async () => {
+  const { selectedCallEvidence } =
+    await import("../../packages/planner/src/evidence");
+  const { model } = provider();
+  const job = createCurrentPipeline(
+    { recording, assets: [], environment: demoEnv },
+    model,
+  );
+  delete job.input.recording.requests[0].response;
+  job.input.recording.requests[0].responseBodyCapture = {
+    state: "OMITTED",
+    reason: "响应超过采集上限",
+  };
+  delete job.input.recording.requests[1].response;
+  job.input.recording.requests[1].status = 204;
+  job.input.recording.requests[1].responseBodyCapture = {
+    state: "EMPTY",
+    bytes: 0,
+  };
+  job.input.recording.dependencies = Array.from({ length: 90 }, (_, index) => ({
+    from: "create-request",
+    to: "list-request",
+    path: `$.field_${index}`,
+    source: "EXACT_VALUE_MATCH",
+    reason: "candidate",
+    confidence: 0.6,
+    confirmed: false,
+  }));
+  const evidence = selectedCallEvidence(job.input.recording, job.catalog!);
+  expect(evidence.evidenceScope.missingResponseRequestIds).toEqual([
+    "create-request",
+  ]);
+  expect(evidence.interfaces[0].samples[0].response).toBeUndefined();
+  expect(evidence.interfaces[0].samples[0].responseBodyCapture?.reason).toBe(
+    "响应超过采集上限",
+  );
+  expect(evidence.dependencies).toHaveLength(90);
+  expect(evidence.dependencies[89]).toMatchObject({
+    fromRequestId: "create-request",
+    toRequestId: "list-request",
+    responsePath: "$.field_89",
+  });
+  const subset = selectedCallEvidence(job.input.recording, [job.catalog![0]]);
+  expect(subset.dependencies).toEqual([]);
+  expect(subset.callSequence).toHaveLength(1);
 });

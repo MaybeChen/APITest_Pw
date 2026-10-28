@@ -156,6 +156,71 @@ export function interfaceSummary(item: CatalogInterface) {
     operationType: item.asset.operationType,
   };
 }
+// Downstream design uses every selected recorded call, not organization samples.
+export function selectedCallEvidence(
+  recording: Recording,
+  catalog: CatalogInterface[],
+) {
+  const byRequest = new Map(
+    catalog.flatMap((item) =>
+      item.asset.sources.map((id) => [id, item.apiId] as const),
+    ),
+  );
+  const calls = recording.requests.flatMap((request, recordingIndex) => {
+    const apiId = byRequest.get(request.id);
+    if (!apiId) return [];
+    return [{ apiId, recordingIndex, request }];
+  });
+  return {
+    evidenceScope: {
+      recordingId: recording.id,
+      selectedApiIds: catalog.map((item) => item.apiId),
+      totalCalls: calls.length,
+      missingResponseRequestIds: calls
+        .filter(
+          ({ request }) =>
+            request.response === undefined &&
+            request.responseBodyCapture?.state !== "EMPTY" &&
+            request.method !== "HEAD" &&
+            ![204, 304].includes(request.status ?? 0),
+        )
+        .map(({ request }) => request.id),
+    },
+    interfaces: catalog.map((item) => ({
+      ...interfaceSummary(item),
+      asset: structuredClone(item.asset),
+      querySchema: structuredClone(item.querySchema),
+      customHeaders: structuredClone(item.customHeaders),
+      samples: calls
+        .filter((call) => call.apiId === item.apiId)
+        .map(({ request, recordingIndex }) => ({
+          ...structuredClone(request),
+          requestId: request.id,
+          recordingIndex,
+        })),
+    })),
+    // References preserve interleaving without duplicating request and response bodies.
+    callSequence: calls.map(({ apiId, request, recordingIndex }) => ({
+      apiId,
+      requestId: request.id,
+      recordingIndex,
+      startedAt: request.startedAt,
+    })),
+    dependencies: recording.dependencies
+      .filter((d) => byRequest.has(d.from) && byRequest.has(d.to))
+      .map((d) => ({
+        ...structuredClone(d),
+        fromRequestId: d.from,
+        toRequestId: d.to,
+        fromApi: byRequest.get(d.from),
+        toApi: byRequest.get(d.to),
+        responsePath: d.path,
+        location: d.targetLocation,
+        type: d.valueType,
+        confirmed: false,
+      })),
+  };
+}
 export function inputEstimate(task: PipelineTask, payload: unknown) {
   return estimateTokens(taskMessages(task, redact(payload))) + 1024;
 }

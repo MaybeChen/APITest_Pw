@@ -25,12 +25,12 @@ import {
   parameterizeRecordedInputs,
   applyRecordedHeaders,
   batchItems,
-  compact,
   dataCandidates,
   defaultLimits,
   inputEstimate,
   interfaceFacts,
   interfaceSummary,
+  selectedCallEvidence,
   organizationEvidence,
   validatePlanData,
 } from "./evidence.js";
@@ -497,6 +497,7 @@ export async function executePipeline(
     const selected = job.catalog!.filter((item) =>
       job.selectedApiIds!.includes(item.apiId),
     );
+    const evidence = selectedCallEvidence(job.input.recording, selected);
     if (!job.caseConfirmed) {
       job.testCase = await run("CASE_DESIGN", async () => {
         const output = await call<TestCase>(
@@ -509,7 +510,7 @@ export async function executePipeline(
               caseVersion: job.input.caseVersion,
               planVersion: job.input.planVersion,
             },
-            interfaces: selected.map(interfaceSummary),
+            ...evidence,
           },
           stageFor("CASE_DESIGN"),
           (value) => {
@@ -535,23 +536,6 @@ export async function executePipeline(
       if (!candidates.some((c) => c.name === proposal.name))
         candidates.push({ ...proposal, value: proposal.value });
     }
-    const byRequest = new Map(
-      selected.flatMap((item) =>
-        item.asset.sources.map((id) => [id, item.apiId] as const),
-      ),
-    );
-    const dependencies = job.input.recording.dependencies
-      .filter((d) => byRequest.has(d.from) && byRequest.has(d.to))
-      .slice(0, 80)
-      .map((d) => ({
-        fromApi: byRequest.get(d.from),
-        toApi: byRequest.get(d.to),
-        responsePath: d.path,
-        location: d.targetLocation,
-        targetKey: d.targetKey,
-        type: d.valueType,
-        confirmed: false,
-      }));
     const normalize = (plan: z.infer<typeof planSchema>) => {
       const useHeaders: typeof applyRecordedHeaders = (value, ...args) =>
         job.planCompilerVersion === 2
@@ -644,17 +628,7 @@ export async function executePipeline(
         availableContexts: [],
         headers: {},
       },
-      interfaces: selected.map((item) => ({
-        ...interfaceSummary(item),
-        asset: {
-          ...item.asset,
-          sources: item.samples.map((sample) => sample.requestId),
-          requestSchema: compact(item.asset.requestSchema),
-          responseSchema: compact(item.asset.responseSchema),
-        },
-        samples: item.samples,
-      })),
-      dependencies,
+      ...evidence,
       dataParameters: candidates.map(
         ({ value: _value, ...metadata }) => metadata,
       ),
@@ -696,15 +670,7 @@ export async function executePipeline(
             planProtocol: "CALL_INTENT_V2",
             scenario: planPayload.scenario,
             testCase: planPayload.testCase,
-            interfaces: planPayload.interfaces.map((item) => ({
-              ...interfaceSummary(
-                selected.find((selected) => selected.apiId === item.apiId)!,
-              ),
-              samples: item.samples,
-              requestSchema: item.asset.requestSchema,
-              responseSchema: item.asset.responseSchema,
-            })),
-            dependencies,
+            ...evidence,
             dataParameters: planPayload.dataParameters,
           },
           stageFor("PLAN_DESIGN"),
