@@ -1,6 +1,7 @@
 import { retainBrowser } from "./retained-browsers.js";
 import { withRawRequestHeaders } from "./request-headers.js";
 import { observeAuthResponses } from "./auth-response.js";
+import { observeUINetwork } from "./ui-network.js";
 import { schedule } from "./scheduler.js";
 import { existsSync } from "node:fs";
 import {
@@ -44,6 +45,7 @@ export async function uiAuthenticate(
   if (profile.environmentRef && profile.environmentRef !== env.id)
     throw new Error("UI flow environment mismatch");
   const responses = observeAuthResponses(context, profile, env);
+  const network = observeUINetwork(context);
   try {
     for (const action of profile.actions) {
       switch (action.type) {
@@ -87,6 +89,7 @@ export async function uiAuthenticate(
       }
     }
     await page.locator(profile.readySelector).waitFor({ state: "visible" });
+    await network.wait();
     const auth: Record<string, string> = {};
     for (const [name, source] of Object.entries(profile.tokenSources)) {
       const kind = source.source ?? "localStorage";
@@ -142,6 +145,7 @@ export async function uiAuthenticate(
     }
     return auth;
   } finally {
+    network.close();
     responses.close();
   }
 }

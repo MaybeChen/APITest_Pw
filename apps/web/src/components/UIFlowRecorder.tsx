@@ -271,6 +271,11 @@ export function UIFlowRecorder({
             />
           </label>
           <p>
+            就绪元素可见后，还会等待所有页面的 HTTP 请求结束，并连续 1
+            秒没有新请求，再开始调用 API。网络等待最多 30
+            秒，超时停止执行；轮询或流式请求可能导致超时。
+          </p>
+          <p>
             Cookie 自动共享。仅在接口还需要额外 Token Header
             时配置下面两项；tokenSources 支持前置接口的 JSON / 响应
             Header、Cookie、localStorage 和 sessionStorage，Header 的
