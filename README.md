@@ -26,6 +26,8 @@ pnpm web      # 前端 :5173
 
 AuthProfile 支持 navigate/click/fill/waitForURL/waitForSelector/assertVisible，`readySelector` 为必填。人工 MFA 可在可见浏览器中完成，受默认 Playwright 超时限制。localStorage Token 必须显式配置 `tokenSources` 和 `AUTH_CONTEXT` Header；例如 Token source 可指定 `prefix: "Bearer "`。不执行浏览器 Axios 拦截器或任意生成代码。
 
+调试前置 UI 回放时，先停止已有后端，再运行 `pnpm dev:headed`（等价于 `pnpm dev --headed`，也兼容 `--head`），然后在界面执行数据集。后端会启动可见 Chromium，UI 操作默认放慢 500 毫秒；浏览器窗口显示在运行后端的机器上，需要可用桌面 / DISPLAY。`RUN_HEADLESS=false` 仍可单独启用有头回放，`RUN_SLOW_MO_MS` 可调整操作延迟（0–5000 毫秒）。普通 `pnpm dev` 保持默认无头执行。API 使用同一 BrowserContext 的 `context.request` 共享 Cookie，API 调用不是页面点击，其请求和响应在运行报告中查看。
+
 ## 校验与测试
 
 ```bash

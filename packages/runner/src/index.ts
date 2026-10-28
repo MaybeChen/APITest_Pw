@@ -226,8 +226,18 @@ export async function run(
   let context: BrowserContext | undefined;
   let browser: Browser | undefined;
   try {
+    const headless = process.env.RUN_HEADLESS !== "false";
+    const configuredSlowMo = Number(
+      process.env.RUN_SLOW_MO_MS ?? (headless ? 0 : 500),
+    );
     browser = await chromium.launch({
-      headless: process.env.RUN_HEADLESS !== "false",
+      headless,
+      slowMo:
+        Number.isFinite(configuredSlowMo) && configuredSlowMo >= 0
+          ? Math.min(configuredSlowMo, 5000)
+          : headless
+            ? 0
+            : 500,
       executablePath:
         process.env.CHROMIUM_PATH ??
         (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
