@@ -341,8 +341,27 @@ export async function run(
             timeout: step.timeoutMs,
             maxRedirects: 0,
           });
-          if (response.status() === 401) {
+          let loginRedirect: URL | undefined;
+          if ([301, 302, 303, 307, 308].includes(response.status())) {
+            const location = response.headers().location;
+            try {
+              const destination = location
+                ? new URL(location, url.href)
+                : undefined;
+              if (
+                destination &&
+                /(?:^|\/)(?:login|sign[-_]?in)(?:[/.]|$)/i.test(
+                  destination.pathname,
+                )
+              )
+                loginRedirect = destination;
+            } catch {
+              // A malformed Location remains an ordinary response for assertion checks.
+            }
+          }
+          if (response.status() === 401 || loginRedirect) {
             if (
+              response.status() === 401 &&
               a.risk === "READ" &&
               authProfile.reauthenticateReads &&
               attempt < step.retries
@@ -357,8 +376,43 @@ export async function run(
               }
               continue;
             }
+            const sessionEntries = await context!
+              .cookies(url.href)
+              .catch(() => []);
+            const pageURL = new URL(page.url());
+            const message = loginRedirect
+              ? `接口返回 HTTP ${response.status()} 并跳转登录页 ${loginRedirect.origin}${loginRedirect.pathname}；当前请求未通过登录态或网关校验，请核对前置 UI 是否完成目标应用登录，以及当前会话与请求 Header 是否匹配`
+              : "接口返回 HTTP 401，当前会话未通过认证；请检查前置 UI 登录结果";
+            result.response = redact({
+              status: response.status(),
+              headers: response.headers(),
+              authDiagnostics: {
+                finalUIPage: `${pageURL.origin}${pageURL.pathname}`,
+                uiRoute: pageURL.hash.match(/^#\/[A-Za-z0-9_/-]+/)?.[0],
+                sessionEntries: sessionEntries.map(
+                  ({
+                    name,
+                    domain,
+                    path,
+                    expires,
+                    httpOnly,
+                    secure,
+                    sameSite,
+                  }) => ({
+                    name,
+                    domain,
+                    path,
+                    expires,
+                    httpOnly,
+                    secure,
+                    sameSite,
+                  }),
+                ),
+              },
+            });
             result.status = "AUTH_ERROR";
-            throw new Error("Authentication expired; no unsafe request replay");
+            report.auth = { status: "FAILED", error: message };
+            throw new Error(message);
           }
           const declaredLength = Number(
             response.headers()["content-length"] ?? 0,
