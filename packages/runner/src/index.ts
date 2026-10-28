@@ -1,3 +1,4 @@
+import { withRawRequestHeaders } from "./request-headers.js";
 import { observeAuthResponses } from "./auth-response.js";
 import { schedule } from "./scheduler.js";
 import { existsSync } from "node:fs";
@@ -340,17 +341,27 @@ export async function run(
         });
         for (let attempt = 0; attempt <= step.retries; attempt++) {
           result.attempts++;
-          const response = await context!.request.fetch(url.href, {
-            method: a.method,
-            headers,
-            ...(body === undefined
-              ? {}
-              : step.bodyType === "form"
-                ? { form: body as Record<string, string> }
-                : { data: body }),
-            timeout: step.timeoutMs,
-            maxRedirects: 0,
-          });
+          const response = await withRawRequestHeaders(
+            {
+              reportId: report.id,
+              stepId: step.id,
+              attempt: attempt + 1,
+              method: a.method,
+              url: url.href,
+            },
+            () =>
+              context!.request.fetch(url.href, {
+                method: a.method,
+                headers,
+                ...(body === undefined
+                  ? {}
+                  : step.bodyType === "form"
+                    ? { form: body as Record<string, string> }
+                    : { data: body }),
+                timeout: step.timeoutMs,
+                maxRedirects: 0,
+              }),
+          );
           let loginRedirect: URL | undefined;
           if ([301, 302, 303, 307, 308].includes(response.status())) {
             const location = response.headers().location;

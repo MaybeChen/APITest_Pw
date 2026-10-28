@@ -6,6 +6,8 @@ if (process.argv.some((arg) => arg === "--headed" || arg === "--head")) {
   process.env.RUN_HEADLESS = "false";
   process.env.RUN_SLOW_MO_MS ??= "500";
 }
+if (process.argv.includes("--raw-headers"))
+  process.env.RUN_LOG_RAW_HEADERS = "true";
 process.env.DEMO_PASSWORD ??= "demo-only";
 const demo = demoApp();
 await demo.listen({ port: 3100, host: "127.0.0.1" });
@@ -23,3 +25,8 @@ console.log(
     ? "Replay browser: headed (visible on the backend host)."
     : "Replay browser: headless. Use pnpm dev:headed for visible UI replay.",
 );
+
+if (process.env.RUN_LOG_RAW_HEADERS === "true")
+  console.log(
+    "API request headers: full plaintext logging enabled in backend console.",
+  );

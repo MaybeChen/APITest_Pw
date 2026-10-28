@@ -28,6 +28,8 @@ AuthProfile 支持 navigate/click/fill/waitForURL/waitForSelector/assertVisible�
 
 调试前置 UI 回放时，先停止已有后端，再运行 `pnpm dev:headed`（等价于 `pnpm dev --headed`，也兼容 `--head`），然后在界面执行数据集。后端会启动可见 Chromium，UI 操作默认放慢 500 毫秒；浏览器窗口显示在运行后端的机器上，需要可用桌面 / DISPLAY。`RUN_HEADLESS=false` 仍可单独启用有头回放，`RUN_SLOW_MO_MS` 可调整操作延迟（0–5000 毫秒）。普通 `pnpm dev` 保持默认无头执行。API 使用同一 BrowserContext 的 `context.request` 共享 Cookie，API 调用不是页面点击，其请求和响应在运行报告中查看。
 
+排查 API 认证时可运行 `pnpm dev:headed --raw-headers`，也可设置 `RUN_LOG_RAW_HEADERS=true`。每次 API 请求会在后端终端输出 `[API_REQUEST_HEADERS]`，附运行 ID、步骤 ID、尝试次数，以及实际发送的明文 Header（含 Cookie、CSRF 和 Playwright 自动添加的 Header）。日志读取 HTTP 发送时已序列化的请求头，不改变 Cookie 注入或请求内容；普通运行默认关闭该日志，运行报告仍使用原有脱敏规则。
+
 ## 校验与测试
 
 ```bash
