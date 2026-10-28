@@ -36,12 +36,12 @@ export const aiConfigSchema = z.discriminatedUnion("provider", [
     ignoreHTTPSErrors: z.boolean().default(false),
     planningLimits: z
       .object({
-        inputBudget: z.number().int().min(16000).max(200000).default(64000),
+        inputBudget: z.number().int().min(16000).max(200000).default(128000),
         maxOutputTokens: z.number().int().min(512).max(16384).default(8192),
         maxInterfacesPerBatch: z.number().int().min(1).max(30).default(6),
       })
       .default({
-        inputBudget: 64000,
+        inputBudget: 128000,
         maxOutputTokens: 8192,
         maxInterfacesPerBatch: 6,
       }),

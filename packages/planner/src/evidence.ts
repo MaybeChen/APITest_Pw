@@ -22,7 +22,7 @@ import {
   type CatalogInterface,
 } from "./pipeline-contracts.js";
 export const defaultLimits = {
-  inputBudget: 64000,
+  inputBudget: 128000,
   maxOutputTokens: 8192,
   maxInterfacesPerBatch: 6,
 };

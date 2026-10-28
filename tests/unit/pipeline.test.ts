@@ -270,7 +270,7 @@ it("fails before sending an oversized planning input and never silently truncate
   await executePipeline(job, model);
   confirmInterfaces(job, [job.catalog![0].apiId], "scene");
   await executePipeline(job, model);
-  job.testCase!.steps[0].expected = "x".repeat(70000);
+  job.testCase!.steps[0].expected = "x".repeat(150000);
   confirmCase(job, job.testCase);
   const count = calls.length;
   await executePipeline(job, model);
@@ -1149,7 +1149,7 @@ it.each([1, 2] as const)(
 it("rejects oversized complete response evidence before case design without silently shortening it", async () => {
   const { model, calls } = provider();
   const r = structuredClone(recording);
-  r.requests[0].response = { id: "recorded-id", large: "x".repeat(70000) };
+  r.requests[0].response = { id: "recorded-id", large: "x".repeat(150000) };
   const job = createCurrentPipeline(
     { recording: r, assets: [], environment: demoEnv },
     model,
@@ -1165,7 +1165,7 @@ it("rejects oversized complete response evidence before case design without sile
   expect(calls).toHaveLength(count);
   expect(
     (job.input.recording.requests[0].response as { large: string }).large,
-  ).toHaveLength(70000);
+  ).toHaveLength(150000);
 });
 
 it("preserves all selected request-level dependencies and explicitly marks missing response bodies", async () => {
@@ -1213,4 +1213,70 @@ it("preserves all selected request-level dependencies and explicitly marks missi
   const subset = selectedCallEvidence(job.input.recording, [job.catalog![0]]);
   expect(subset.dependencies).toEqual([]);
   expect(subset.callSequence).toHaveLength(1);
+});
+
+it.each(["CASE_DESIGN", "PLAN_DESIGN"])(
+  "uses the current budget to resume a saved %s job without cutting evidence",
+  async (failedStage) => {
+    const { model, calls } = provider();
+    model.planningLimits = { ...defaultLimits, inputBudget: 64000 };
+    const r = structuredClone(recording);
+    delete r.requests[0].headers.authorization;
+    if (failedStage === "CASE_DESIGN")
+      r.requests[0].response = { id: "recorded-id", large: "x".repeat(70000) };
+    const job = createCurrentPipeline(
+      { recording: r, assets: [], environment: demoEnv },
+      model,
+    );
+    job.authContract = { headers: {}, availableContexts: [] };
+    await executePipeline(job, model);
+    confirmInterfaces(job, [job.catalog![0].apiId], "scene");
+    await executePipeline(job, model);
+    if (failedStage === "PLAN_DESIGN") {
+      job.testCase!.steps[0].expected = "x".repeat(70000);
+      confirmCase(job, job.testCase);
+      await executePipeline(job, model);
+    }
+    expect(job.state).toBe("FAILED");
+    expect(job.error).toContain("超过预算 64000");
+    const saved = structuredClone(job);
+    expect(saved.modelLimits?.inputBudget).toBe(64000);
+    const count = calls.filter((call) => call.task === failedStage).length;
+    model.planningLimits = { ...model.planningLimits, inputBudget: 128000 };
+    if (failedStage === "PLAN_DESIGN") regeneratePlan(saved);
+    await executePipeline(saved, model);
+    expect(saved.state, saved.error).toBe(
+      failedStage === "CASE_DESIGN" ? "WAITING_CASE_REVIEW" : "NEEDS_REVIEW",
+    );
+    expect(saved.modelLimits?.inputBudget).toBe(128000);
+    expect(calls.filter((call) => call.task === failedStage)).toHaveLength(
+      count + 1,
+    );
+    const payload = calls
+      .filter((call) => call.task === failedStage)
+      .at(-1)!.input;
+    if (failedStage === "CASE_DESIGN")
+      expect(payload.interfaces[0].samples[0].response.large).toHaveLength(
+        70000,
+      );
+    else expect(payload.testCase.steps[0].expected).toHaveLength(70000);
+  },
+);
+
+it("aligns default planning budgets across configuration, provider, and pipeline", async () => {
+  const { aiConfigSchema } = await import("../../apps/server/src/ai-config");
+  const config = aiConfigSchema.parse({
+    provider: "openai-compatible",
+    baseURL: "https://model.example/v1",
+    model: "test-model",
+  });
+  if (config.provider !== "openai-compatible")
+    throw new Error("Unexpected provider");
+  const model = new ModelAIProvider({
+    endpoint: "https://model.example/v1/chat/completions",
+    model: "test-model",
+  });
+  expect(defaultLimits.inputBudget).toBe(128000);
+  expect(config.planningLimits.inputBudget).toBe(defaultLimits.inputBudget);
+  expect(model.planningLimits.inputBudget).toBe(defaultLimits.inputBudget);
 });

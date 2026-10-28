@@ -368,7 +368,7 @@ export class ModelAIProvider implements AIProvider {
   get planningLimits() {
     return (
       this.config.planningLimits ?? {
-        inputBudget: 64000,
+        inputBudget: 128000,
         maxOutputTokens: 8192,
         maxInterfacesPerBatch: 6,
       }
@@ -382,7 +382,7 @@ export class ModelAIProvider implements AIProvider {
     const messages = taskMessages(task, redact(payload));
     if (estimateTokens(messages) + 1024 > this.planningLimits.inputBudget)
       throw new Error(
-        `模型输入超过保守 token 预算 (${this.planningLimits.inputBudget})，请减少接口或缩小场景；不会发送超预算请求。`,
+        `模型输入 UTF-8 字节保守估算超过预算 (${this.planningLimits.inputBudget})；完整调用证据未裁剪，请检查 config/ai.json 的 planningLimits.inputBudget；未发送请求。`,
       );
     const content = await this.completion(
       messages,

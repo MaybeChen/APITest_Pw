@@ -12,7 +12,7 @@
     "maxChars": 64000
   },
   "planningLimits": {
-    "inputBudget": 64000,
+    "inputBudget": 128000,
     "maxOutputTokens": 8192,
     "maxInterfacesPerBatch": 6
   }

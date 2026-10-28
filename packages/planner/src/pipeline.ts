@@ -264,7 +264,20 @@ export async function executePipeline(
   )
     throw new Error("模型配置已改变，请新建生成任务");
   if (!provider.runTask) throw new Error("当前 Provider 不支持新版分阶段流程");
-  const limits = job.modelLimits ?? defaultLimits;
+  const limits = { ...(job.modelLimits ?? defaultLimits) };
+  // Preserve grouping/checkpoints while organization and selection are incomplete.
+  // Downstream retries must use the current configured budget, not a stale job snapshot.
+  if (
+    ["API_ORGANIZATION", "API_SELECTION"].every((id) =>
+      job.stages.some(
+        (stage) => stage.id === id && stage.state === "SUCCEEDED",
+      ),
+    )
+  ) {
+    limits.inputBudget =
+      provider.planningLimits?.inputBudget ?? defaultLimits.inputBudget;
+    job.modelLimits = { ...limits };
+  }
   const persist = async () => {
     job.updatedAt = Date.now();
     job.revision++;
@@ -290,7 +303,7 @@ export async function executePipeline(
       const estimate = inputEstimate(task, request);
       if (estimate > limits.inputBudget)
         throw new Error(
-          `${task} 输入保守估算 ${estimate} 超过预算 ${limits.inputBudget}，请缩小场景或接口范围；未发送请求。`,
+          `${task} 输入 UTF-8 字节保守估算 ${estimate} 超过预算 ${limits.inputBudget}；完整调用证据未裁剪，请检查 config/ai.json 的 planningLimits.inputBudget，重启后端后继续生成；未发送请求。`,
         );
       checkpoint.state = "RUNNING";
       checkpoint.attempts++;
