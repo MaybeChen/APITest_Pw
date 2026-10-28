@@ -1307,3 +1307,86 @@ test("deletes a history entry only after confirmation and keeps it absent after 
   await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await expect(remove).toHaveCount(0);
 });
+
+test("shows complete raw headers from a saved debug authentication failure report", async ({
+  page,
+}) => {
+  const report = {
+    id: "raw-header-report",
+    caseId: "raw-case",
+    caseVersion: 1,
+    planId: "raw-plan",
+    planVersion: 1,
+    debug: { rawRequestHeaders: true, browserRetained: true },
+    startedAt: 1,
+    endedAt: 10,
+    status: "FAILED",
+    auth: { status: "FAILED", error: "接口跳转登录页" },
+    cleanupStatus: "PASSED",
+    resources: [],
+    residualResources: [],
+    dataset: {
+      id: "raw-data",
+      version: 1,
+      rowId: "first",
+      rowName: "明文 Header 验证",
+    },
+    semanticSteps: [
+      { id: "raw-step", title: "查询评测集参数", expected: "HTTP 200" },
+    ],
+    steps: [
+      {
+        stepId: "raw-call",
+        semanticStepRef: "raw-step",
+        phase: "API",
+        status: "AUTH_ERROR",
+        startedAt: 1,
+        endedAt: 10,
+        attempts: 1,
+        assertions: [],
+        request: {
+          method: "POST",
+          url: "https://example.test/api/parameters",
+          headersSource: "ACTUAL_REQUEST",
+          headers: {
+            cookie: "session=ui-raw-session",
+            "x-gde-csrf-token": "ui-raw-csrf",
+            "user-agent": "test-agent",
+            host: "example.test",
+          },
+          rawHeaders:
+            "cookie: session=ui-raw-session\r\nx-gde-csrf-token: ui-raw-csrf",
+        },
+        response: { status: 302 },
+        error: "接口跳转登录页",
+      },
+    ],
+  };
+  await page.route("**/api/reports", (route) =>
+    route.fulfill({ json: [report] }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "运行报告", exact: true }).click();
+  await page.getByRole("button", { name: /明文 Header 验证/ }).click();
+  await expect(
+    page.getByText(
+      "本次报告展示实际发送的明文请求 Header，包含 Cookie 和认证字段。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("本次执行结束后保留了浏览器窗口", { exact: false }),
+  ).toBeVisible();
+  await page
+    .locator("summary")
+    .filter({ hasText: "AUTH_ERROR · raw-call" })
+    .click();
+  const detail = page
+    .locator("details")
+    .filter({ hasText: "AUTH_ERROR · raw-call" })
+    .locator("pre");
+  await expect(detail).toContainText("session=ui-raw-session");
+  await expect(detail).toContainText("ui-raw-csrf");
+  await expect(detail).toContainText('"host": "example.test"');
+  await expect(detail).not.toContainText("[REDACTED]");
+});

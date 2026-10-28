@@ -1,3 +1,4 @@
+import { retainBrowser } from "./retained-browsers.js";
 import { withRawRequestHeaders } from "./request-headers.js";
 import { observeAuthResponses } from "./auth-response.js";
 import { schedule } from "./scheduler.js";
@@ -26,6 +27,7 @@ import {
   atPath,
   ordered,
   redact,
+  redactReport,
   resolve,
   validate,
   setAtPath,
@@ -205,6 +207,9 @@ export async function run(
     true,
   );
   const report: Report = {
+    ...(process.env.RUN_LOG_RAW_HEADERS === "true"
+      ? { debug: { rawRequestHeaders: true } }
+      : {}),
     semanticSteps: structuredClone(c.steps),
     environmentSnapshot: structuredClone(env),
     authProfileRef: authProfile.id,
@@ -348,6 +353,14 @@ export async function run(
               attempt: attempt + 1,
               method: a.method,
               url: url.href,
+              onHeaders: ({ headers: actualHeaders, rawHeaders }) => {
+                result.request = {
+                  ...(result.request as Record<string, unknown>),
+                  headers: actualHeaders,
+                  rawHeaders,
+                  headersSource: "ACTUAL_REQUEST",
+                };
+              },
             },
             () =>
               context!.request.fetch(url.href, {
@@ -533,8 +546,24 @@ export async function run(
   } catch (e) {
     report.auth = { status: "FAILED", error: String(redact(String(e))) };
   } finally {
-    await context?.close();
-    await browser?.close();
+    if (
+      process.env.RUN_KEEP_BROWSER_OPEN === "true" &&
+      browser?.isConnected() &&
+      context &&
+      context.pages().some((page) => !page.isClosed())
+    ) {
+      retainBrowser(report.id, browser, context);
+      report.debug = {
+        rawRequestHeaders: report.debug?.rawRequestHeaders ?? false,
+        browserRetained: true,
+      };
+      console.info(
+        `[BROWSER_RETAINED] reportId=${report.id}; browser and context remain open for inspection.`,
+      );
+    } else {
+      await context?.close();
+      await browser?.close();
+    }
     report.resources = fixtures.resources;
     report.residualResources = fixtures.resources
       .filter((r) => !r.cleaned)
@@ -553,7 +582,7 @@ export async function run(
         ? "PASSED"
         : "FAILED";
   }
-  return redact(report);
+  return redactReport(report);
 }
 
 export async function runDataset(

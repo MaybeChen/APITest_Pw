@@ -1,3 +1,10 @@
+import {
+  getRetainedBrowser,
+  closeRetainedBrowsers,
+} from "../../packages/runner/src/retained-browsers";
+import { createApp } from "../../apps/server/src/app";
+import { Store } from "../../packages/storage/src/index";
+import { MockAIProvider } from "../../packages/planner/src/index";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import { intentFixture } from "../fixtures/intent";
@@ -5,15 +12,21 @@ import { compileCallIntent } from "../../packages/planner/src/intent-compiler";
 import { run } from "../../packages/runner/src/index";
 import type { AuthProfile } from "../../packages/contracts/src/index";
 
-it.each([true, false])(
-  "logs actual unredacted wire headers only when enabled (%s)",
-  async (enabled) => {
+it.each([
+  { enabled: true, redirect: false, keep: false },
+  { enabled: false, redirect: false, keep: false },
+  { enabled: true, redirect: true, keep: true },
+  { enabled: true, redirect: false, keep: true },
+])(
+  "logs and persists actual request headers (enabled=$enabled, redirect=$redirect, keep=$keep)",
+  async ({ enabled, redirect, keep }) => {
     const received: { method: string; headers: string[] }[] = [];
     const logs: string[] = [];
     const logger = vi
       .spyOn(console, "info")
       .mockImplementation((message) => logs.push(String(message)));
     vi.stubEnv("RUN_LOG_RAW_HEADERS", enabled ? "true" : "false");
+    vi.stubEnv("RUN_KEEP_BROWSER_OPEN", keep ? "true" : "false");
     const server = createServer((req, res) => {
       if (req.url === "/") {
         const body =
@@ -28,6 +41,14 @@ it.each([true, false])(
       } else if (req.url?.startsWith("/api/orders")) {
         req.resume();
         received.push({ method: req.method!, headers: req.rawHeaders });
+        if (redirect) {
+          res.writeHead(302, {
+            location: "/dspcas/login",
+            "content-length": "0",
+          });
+          res.end();
+          return;
+        }
         const body = JSON.stringify({ id: "fresh-order", name: "captured" });
         res.writeHead(req.method === "POST" ? 201 : 200, {
           "content-type": "application/json",
@@ -84,12 +105,13 @@ it.each([true, false])(
         f.context.environment,
         profile,
       );
-      expect(report.status).toBe("PASSED");
-      expect(received).toHaveLength(2);
+      expect(report.status).toBe(redirect ? "FAILED" : "PASSED");
+      if (redirect) expect(report.steps[0].status).toBe("AUTH_ERROR");
+      expect(received).toHaveLength(redirect ? 1 : 2);
       const headersLogs = logs.filter((line) =>
         line.startsWith("[API_REQUEST_HEADERS]"),
       );
-      expect(headersLogs).toHaveLength(enabled ? 2 : 0);
+      expect(headersLogs).toHaveLength(enabled ? received.length : 0);
       for (const [index, log] of headersLogs.entries()) {
         const [metadataLine, ...headerLines] = log.trim().split("\n");
         const metadata = JSON.parse(
@@ -113,10 +135,66 @@ it.each([true, false])(
         expect(log).toMatch(/host:/i);
         if (index === 0) expect(log).toMatch(/content-length:/i);
       }
-      expect(JSON.stringify(report)).not.toContain("raw-session-value");
-      expect(JSON.stringify(report)).not.toContain("raw-csrf-value");
-      expect(JSON.stringify(report)).not.toContain("raw-access-value");
+      const retained = getRetainedBrowser(report.id);
+      expect(!!retained).toBe(keep);
+      if (keep) {
+        expect(report.debug?.browserRetained).toBe(true);
+        expect(retained!.browser.isConnected()).toBe(true);
+        expect(
+          (await retained!.context.cookies(baseURL)).find(
+            (entry) => entry.name === "session",
+          )?.value,
+        ).toBe("raw-session-value");
+        expect(
+          await retained!.context.pages()[0].locator("#ready").isVisible(),
+        ).toBe(true);
+        if (!redirect) {
+          await Promise.all(
+            retained!.context.pages().map((page) => page.close()),
+          );
+          await expect
+            .poll(() => getRetainedBrowser(report.id))
+            .toBeUndefined();
+          await expect.poll(() => retained!.browser.isConnected()).toBe(false);
+        }
+      }
+      const store = new Store("file::memory:");
+      const app = await createApp(store, new MockAIProvider());
+      try {
+        // Verify the persisted history endpoint as well as the immediate result.
+        await store.put("report", report.id, 1, report);
+        const stored = await store.get<typeof report>("report", report.id);
+        const history = (await app.inject("/api/reports")).json();
+        expect(history).toEqual([stored]);
+        if (enabled) {
+          expect(stored?.debug?.rawRequestHeaders).toBe(true);
+          expect(stored?.steps[0].request).toMatchObject({
+            headersSource: "ACTUAL_REQUEST",
+            headers: {
+              cookie: "session=raw-session-value",
+              "x-gde-csrf-token": "raw-csrf-value",
+              authorization: "Bearer raw-access-value",
+            },
+          });
+          expect(
+            (stored?.steps[0].request as { rawHeaders: string }).rawHeaders,
+          ).toContain("cookie: session=raw-session-value");
+          expect(report.steps[0].request).toEqual(stored?.steps[0].request);
+        } else {
+          for (const value of [
+            "raw-session-value",
+            "raw-csrf-value",
+            "raw-access-value",
+          ])
+            expect(JSON.stringify(stored)).not.toContain(value);
+        }
+      } finally {
+        await app.close();
+      }
+      expect(getRetainedBrowser(report.id)).toBeUndefined();
+      if (retained) expect(retained.browser.isConnected()).toBe(false);
     } finally {
+      await closeRetainedBrowsers();
       logger.mockRestore();
       vi.unstubAllEnvs();
       await new Promise<void>((resolve) => server.close(() => resolve()));

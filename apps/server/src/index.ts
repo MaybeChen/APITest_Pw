@@ -2,10 +2,16 @@ import { defaultDatabaseURL } from "../../../packages/storage/src/index.js";
 import { createApp } from "./app.js";
 import { demoApp } from "../../demo-app/src/app.js";
 // Headed replay is opt-in so normal server and CI execution remain headless.
-if (process.argv.some((arg) => arg === "--headed" || arg === "--head")) {
+if (
+  process.argv.some((arg) =>
+    ["--headed", "--head", "--keep-browser"].includes(arg),
+  )
+) {
   process.env.RUN_HEADLESS = "false";
   process.env.RUN_SLOW_MO_MS ??= "500";
 }
+if (process.argv.includes("--keep-browser"))
+  process.env.RUN_KEEP_BROWSER_OPEN = "true";
 if (process.argv.includes("--raw-headers"))
   process.env.RUN_LOG_RAW_HEADERS = "true";
 process.env.DEMO_PASSWORD ??= "demo-only";
@@ -29,4 +35,9 @@ console.log(
 if (process.env.RUN_LOG_RAW_HEADERS === "true")
   console.log(
     "API request headers: full plaintext logging enabled in backend console.",
+  );
+
+if (process.env.RUN_KEEP_BROWSER_OPEN === "true")
+  console.log(
+    "Replay browser: retained after execution; close the window manually or stop this backend.",
   );

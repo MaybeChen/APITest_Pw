@@ -11,6 +11,7 @@ import {
   type Environment,
   type Binding,
   type Dataset,
+  type Report,
 } from "../../contracts/src/index.js";
 const sensitive =
   /password|passwd|secret|cookie|authorization|token|csrf|signature|credit.?card|cardnumber|cvv|api.?key/i;
@@ -61,6 +62,25 @@ export function redact(value: unknown, key = "", requestHeader = false): any {
       .replace(/\b\d{13,19}\b/g, "[REDACTED]");
   }
   return value;
+}
+// Raw request headers are retained only for reports explicitly produced in debug mode.
+export function redactReport(report: Report): Report {
+  const safe = redact(report) as Report;
+  for (const [index, step] of (report.steps ?? []).entries()) {
+    if (!step.request || typeof step.request !== "object") continue;
+    const original = step.request as Record<string, unknown>;
+    const request = safe.steps[index].request as Record<string, unknown>;
+    delete request.rawHeaders;
+    if (
+      report.debug?.rawRequestHeaders === true &&
+      original.headersSource === "ACTUAL_REQUEST"
+    ) {
+      request.headers = structuredClone(original.headers);
+      if (typeof original.rawHeaders === "string")
+        request.rawHeaders = original.rawHeaders;
+    }
+  }
+  return safe;
 }
 export function observedHeaderBinding(name: string, value: string): Binding {
   if (

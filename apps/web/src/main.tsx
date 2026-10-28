@@ -1317,6 +1317,17 @@ function App() {
                   UI 登录：{report.auth.status} {report.auth.error} · 清理：
                   {report.cleanupStatus}
                 </p>
+                {report.debug?.browserRetained && (
+                  <p className="message">
+                    本次执行结束后保留了浏览器窗口，可检查当前会话；手动关闭窗口或停止后端即可结束调试。
+                  </p>
+                )}
+                {report.debug?.rawRequestHeaders && (
+                  <p className="message">
+                    本次报告展示实际发送的明文请求 Header，包含 Cookie
+                    和认证字段。
+                  </p>
+                )}
                 {(
                   report.semanticSteps ??
                   cases.find(

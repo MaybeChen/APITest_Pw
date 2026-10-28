@@ -431,6 +431,7 @@ export interface StepResult {
   error?: string;
 }
 export interface Report {
+  debug?: { rawRequestHeaders: boolean; browserRetained?: boolean };
   dataset?: { id: string; version: number; rowId: string; rowName: string };
   batchId?: string;
   semanticSteps?: TestCase["steps"];

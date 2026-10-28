@@ -5,7 +5,8 @@ import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { eq, and, desc } from "drizzle-orm";
-import { redact } from "../../core/src/index.js";
+import type { Report } from "../../contracts/src/index.js";
+import { redact, redactReport } from "../../core/src/index.js";
 export const documents = sqliteTable("documents", {
   kind: text("kind").notNull(),
   id: text("id").primaryKey(),
@@ -44,7 +45,12 @@ export class Store {
       id: `${kind}:${entityId}:${version}`,
       entityId,
       version,
-      data: kind === "recording" || kind === "report" ? redact(data) : data,
+      data:
+        kind === "report"
+          ? redactReport(data as Report)
+          : kind === "recording"
+            ? redact(data)
+            : data,
       createdAt: Date.now(),
     });
   }

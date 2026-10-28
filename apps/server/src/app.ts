@@ -1,3 +1,4 @@
+import { closeRetainedBrowsers } from "../../../packages/runner/src/retained-browsers.js";
 import { UIRecorder } from "../../../packages/recorder/src/ui-recorder.js";
 import {
   createPipeline,
@@ -776,6 +777,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
     for (const rec of sessions.values()) await rec.stop();
     for (const rec of uiSessions.values()) await rec.stop();
     await Promise.allSettled(activeGenerations.values());
+    await closeRetainedBrowsers();
     await aiProvider.close?.();
     store.client.close();
   });

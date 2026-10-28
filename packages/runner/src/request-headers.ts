@@ -8,6 +8,10 @@ type RequestScope = {
   attempt: number;
   method: string;
   url: string;
+  onHeaders?: (capture: {
+    headers: Record<string, string | string[]>;
+    rawHeaders: string;
+  }) => void;
 };
 const scope = new AsyncLocalStorage<RequestScope>();
 let subscribed = false;
@@ -41,8 +45,22 @@ function subscribe() {
             ),
           )
           .join("\r\n");
+    const headers: Record<string, string | string[]> = {};
+    for (const line of rawHeaders.split("\r\n")) {
+      const colon = line.indexOf(":");
+      if (colon < 1) continue;
+      const name = line.slice(0, colon);
+      const value = line.slice(colon + 1).trim();
+      const previous = headers[name];
+      headers[name] =
+        previous === undefined
+          ? value
+          : [...(Array.isArray(previous) ? previous : [previous]), value];
+    }
+    const { onHeaders, ...metadata } = current;
+    onHeaders?.({ headers, rawHeaders });
     console.info(
-      `[API_REQUEST_HEADERS] ${JSON.stringify(current)}\n${rawHeaders}\n`,
+      `[API_REQUEST_HEADERS] ${JSON.stringify(metadata)}\n${rawHeaders}\n`,
     );
   });
 }
