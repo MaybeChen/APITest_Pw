@@ -17,9 +17,17 @@ it.each([
   { enabled: false, redirect: false, keep: false },
   { enabled: true, redirect: true, keep: true },
   { enabled: true, redirect: false, keep: true },
+  { enabled: true, redirect: false, keep: false, chunked: true },
+  {
+    enabled: true,
+    redirect: false,
+    keep: false,
+    chunked: true,
+    oversized: true,
+  },
 ])(
   "logs and persists actual request headers (enabled=$enabled, redirect=$redirect, keep=$keep)",
-  async ({ enabled, redirect, keep }) => {
+  async ({ enabled, redirect, keep, chunked, oversized }) => {
     const received: { method: string; headers: string[] }[] = [];
     const logs: string[] = [];
     const logger = vi
@@ -49,12 +57,18 @@ it.each([
           res.end();
           return;
         }
-        const body = JSON.stringify({ id: "fresh-order", name: "captured" });
+        const body = JSON.stringify({
+          id: "fresh-order",
+          name: oversized ? "x".repeat(1048576) : "captured",
+        });
         res.writeHead(req.method === "POST" ? 201 : 200, {
           "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
+          ...(chunked ? {} : { "content-length": Buffer.byteLength(body) }),
         });
-        res.end(body);
+        if (chunked) {
+          res.write(body.slice(0, 5));
+          res.end(body.slice(5));
+        } else res.end(body);
       } else {
         res.writeHead(404, { "content-length": "0" });
         res.end();
@@ -105,9 +119,13 @@ it.each([
         f.context.environment,
         profile,
       );
-      expect(report.status).toBe(redirect ? "FAILED" : "PASSED");
+      expect(report.status).toBe(redirect || oversized ? "FAILED" : "PASSED");
       if (redirect) expect(report.steps[0].status).toBe("AUTH_ERROR");
-      expect(received).toHaveLength(redirect ? 1 : 2);
+      if (oversized)
+        expect(report.steps[0].error).toContain(
+          "Runner response limit exceeded",
+        );
+      expect(received).toHaveLength(redirect || oversized ? 1 : 2);
       const headersLogs = logs.filter((line) =>
         line.startsWith("[API_REQUEST_HEADERS]"),
       );

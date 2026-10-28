@@ -457,13 +457,9 @@ export async function run(
           );
           if (declaredLength > 1048576)
             throw new Error("Runner response limit exceeded");
-          if (
-            !response.headers()["content-length"] &&
-            ![204, 304].includes(response.status())
-          )
-            throw new Error(
-              "Response requires a bounded Content-Length for safe capture",
-            );
+          // Missing Content-Length is valid for finite chunked/HTTP2 responses.
+          // Playwright's fetch timeout bounds receiving the response; validate
+          // actual (decompressed) bytes as Content-Length alone is insufficient.
           const bytes = await response.body();
           if (bytes.length > 1048576)
             throw new Error("Runner response limit exceeded");
