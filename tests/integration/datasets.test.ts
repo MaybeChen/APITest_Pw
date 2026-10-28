@@ -181,3 +181,54 @@ it("blocks unreviewed generated data through both dataset and single-run APIs", 
     await app.close();
   }
 });
+
+it("generates dataset IDs on the server and preserves dataset validation when no ID is provided", async () => {
+  const b = fixture();
+  const store = new Store("file::memory:");
+  const app = await createApp(store, new MockAIProvider());
+  try {
+    const approved = await app.inject({
+      method: "POST",
+      url: "/api/approve",
+      payload: { ...b, confirmed: true },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    const { id: _id, ...draft } = b.dataset;
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/datasets",
+        payload: draft,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      const saved = response.json();
+      expect(saved.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(saved.rows).toEqual(draft.rows);
+      expect(await store.get("dataset", saved.id, 1)).toEqual(saved);
+      ids.push(saved.id);
+    }
+    expect(new Set(ids).size).toBe(2);
+    const duplicateRows = await app.inject({
+      method: "POST",
+      url: "/api/datasets",
+      payload: { ...draft, rows: [draft.rows[0], draft.rows[0]] },
+    });
+    expect(duplicateRows.statusCode).toBe(400);
+    expect(duplicateRows.body).toContain("Duplicate dataset row ID");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/datasets",
+          payload: { ...draft, id: "" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect((await app.inject("/api/datasets")).json()).toHaveLength(2);
+  } finally {
+    await app.close();
+  }
+});

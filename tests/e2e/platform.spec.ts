@@ -395,7 +395,14 @@ test("restores staged generation progress and opens its workflow draft", async (
 test("extracts test data and replays one approved workflow with two datasets rows", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis.crypto, "randomUUID", {
+      value: undefined,
+      configurable: true,
+    });
+  });
   await page.goto("/");
+  expect(await page.evaluate(() => typeof crypto.randomUUID)).toBe("undefined");
   await page.getByRole("button", { name: "历史记录", exact: true }).click();
   await page.getByRole("button", { name: "载入订单演示模板" }).click();
   await page.getByRole("button", { name: "从流程提取测试数据" }).click();
@@ -413,6 +420,21 @@ test("extracts test data and replays one approved workflow with two datasets row
   await page.getByRole("button", { name: "批准并保存版本" }).click();
   await expect(
     page.getByText("该版本已批准并以不可覆盖记录保存。"),
+  ).toBeVisible();
+  const savedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/datasets") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "保存数据集", exact: true }).click();
+  const saved = await savedResponse;
+  expect(saved.ok()).toBe(true);
+  expect(saved.request().postDataJSON()).not.toHaveProperty("id");
+  expect((await saved.json()).id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  await expect(
+    page.getByText("已保存 2 组数据，可重复执行。", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "执行全部数据组" }).click();
   await expect(page.getByText("已执行 2 组数据，通过 2 组。")).toBeVisible({
@@ -944,7 +966,9 @@ test("reviews recommended interfaces and edited semantic expectations before gen
   await page.route("**/api/datasets", async (route) => {
     if (route.request().method() === "POST") {
       savedData = route.request().postDataJSON();
-      await route.fulfill({ json: savedData });
+      await route.fulfill({
+        json: { ...savedData, id: "saved-review-dataset" },
+      });
     } else await route.fulfill({ json: [] });
   });
   await page

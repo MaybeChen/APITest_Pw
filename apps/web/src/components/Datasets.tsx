@@ -165,8 +165,7 @@ export function Datasets({
     try {
       let dataset = available.find((d) => `${d.id}:${d.version}` === selected);
       if (!dataset) {
-        dataset = {
-          id: crypto.randomUUID(),
+        const draft: Omit<Dataset, "id"> = {
           version: 1,
           name,
           planId: plan.planId,
@@ -177,7 +176,7 @@ export function Datasets({
         const response = await fetch("/api/datasets", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(dataset),
+          body: JSON.stringify(draft),
         });
         if (!response.ok) throw new Error(await response.text());
         dataset = (await response.json()) as Dataset;

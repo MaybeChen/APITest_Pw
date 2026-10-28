@@ -697,7 +697,13 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.get("/api/datasets", async () => store.list<Dataset>("dataset"));
   app.post("/api/datasets", async (req) => {
-    const dataset = datasetSchema.parse(req.body);
+    const input = z
+      .object({
+        id: datasetSchema.shape.id.default(() => randomUUID()),
+      })
+      .passthrough()
+      .parse(req.body);
+    const dataset = datasetSchema.parse(input);
     const plan = await store.get<Plan>(
       "plan",
       dataset.planId,
