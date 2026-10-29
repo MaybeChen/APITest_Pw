@@ -32,6 +32,22 @@ it("records DOM context under the actual tsx runtime across reloads, frames and 
   expect(result.recording.operations.some((op) => op.type === "input")).toBe(
     true,
   );
+  for (const path of [
+    "popup-initial-get",
+    "popup-initial-post",
+    "popup-frame",
+  ]) {
+    const requests = result.recording.requests.filter(
+      (request) => new URL(request.url).pathname === `/api/${path}`,
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0].status).toBe(200);
+    expect(requests[0].response).toEqual({ ok: true });
+    if (path === "popup-initial-post") {
+      expect(requests[0].method).toBe("POST");
+      expect(requests[0].body).toEqual({ from: "popup" });
+    }
+  }
   for (const [path, heading] of [
     ["main", "Main context"],
     ["frame", "Frame context"],

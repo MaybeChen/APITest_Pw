@@ -12,8 +12,12 @@ const server = createServer((req, res) => {
     body =
       "<h1>Frame context</h1><button onclick=\"fetch('/api/frame')\">Frame request</button>";
   else if (path === "/popup")
-    body =
-      "<h1>Popup context</h1><button onclick=\"fetch('/api/popup')\">Popup request</button>";
+    body = `<h1>Popup context</h1><script>
+        fetch('/api/popup-initial-get');
+        fetch('/api/popup-initial-post', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:'popup'})});
+      </script><iframe src="/popup-frame"></iframe><button onclick="fetch('/api/popup')">Popup request</button>`;
+  else if (path === "/popup-frame")
+    body = `<script>const xhr = new XMLHttpRequest();xhr.open('GET','/api/popup-frame');xhr.send();</script>`;
   else
     body =
       '<main><h1>Main context</h1><textarea>private-default-value</textarea><button onclick="fetch(\'/api/main\')">Main request</button><a href="/popup" target="_blank">Open popup</a><iframe src="/frame"></iframe></main>';
@@ -48,6 +52,7 @@ try {
   await page.getByRole("link", { name: "Open popup" }).click();
   const popup = await popupPromise;
   await popup.getByRole("button", { name: "Popup request" }).click();
+  await popup.frameLocator("iframe").locator("body").waitFor();
   await popup.waitForTimeout(400);
   const recording = await recorder.stop();
   const job = createGeneration(
