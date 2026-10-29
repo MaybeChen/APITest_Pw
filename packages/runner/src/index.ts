@@ -437,6 +437,8 @@ export async function run(
           headerBlacklist: [...headerBlacklist],
         });
         for (let attempt = 0; attempt <= step.retries; attempt++) {
+          // Temporary diagnostic pacing: wait before each API request/attempt.
+          await new Promise((resolve) => setTimeout(resolve, 2000));
           result.attempts++;
           const cookieSnapshot =
             process.env.RUN_LOG_RAW_HEADERS === "true"
@@ -683,7 +685,8 @@ export async function run(
       await schedule(
         steps.filter((s) => s.phase !== "CLEANUP"),
         assets,
-        p.execution?.maxConcurrency ?? 1,
+        // Temporary serial execution ensures the two-second gap is not bypassed by parallel steps.
+        1,
         execute,
         !authProfile.reauthenticateReads,
       );

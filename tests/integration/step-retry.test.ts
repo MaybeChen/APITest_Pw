@@ -15,6 +15,7 @@ it("retries only the selected read with the same browser session and upstream va
     creates = 0,
     reads = 0;
   const urls: string[] = [];
+  const requestTimes: number[] = [];
   const server = createServer((req, res) => {
     req.resume();
     if (req.url === "/") {
@@ -26,6 +27,7 @@ it("retries only the selected read with the same browser session and upstream va
       res.end("<div>Ready</div>");
       return;
     }
+    requestTimes.push(Date.now());
     expect(req.headers.cookie).toContain("session=same-session");
     const creating = req.method === "POST";
     if (creating) creates++;
