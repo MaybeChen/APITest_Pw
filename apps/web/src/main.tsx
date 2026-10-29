@@ -1325,7 +1325,8 @@ function App() {
                 {report.debug?.rawRequestHeaders && (
                   <p className="message">
                     本次报告展示实际发送的明文请求 Header，包含 Cookie
-                    和认证字段。
+                    和认证字段。 请求详情中的 cookieDiagnostics 展示发送前全部
+                    Cookie、匹配目标地址的 Cookie，以及与实际发送内容的差异。
                   </p>
                 )}
                 {(

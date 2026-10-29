@@ -71,6 +71,9 @@ export function redactReport(report: Report): Report {
     const original = step.request as Record<string, unknown>;
     const request = safe.steps[index].request as Record<string, unknown>;
     delete request.rawHeaders;
+    delete request.cookieDiagnostics;
+    if (report.debug?.rawRequestHeaders === true && original.cookieDiagnostics)
+      request.cookieDiagnostics = structuredClone(original.cookieDiagnostics);
     if (
       report.debug?.rawRequestHeaders === true &&
       original.headersSource === "ACTUAL_REQUEST"

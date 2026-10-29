@@ -42,8 +42,10 @@ it.each([
         res.writeHead(200, {
           "content-type": "text/html",
           "content-length": Buffer.byteLength(body),
-          "set-cookie":
+          "set-cookie": [
             "session=raw-session-value; HttpOnly; Path=/; SameSite=Lax",
+            "session=other-path-session; HttpOnly; Path=/other; SameSite=Lax",
+          ],
         });
         res.end(body);
       } else if (req.url?.startsWith("/api/orders")) {
@@ -185,6 +187,29 @@ it.each([
         const history = (await app.inject("/api/reports")).json();
         expect(history).toEqual([stored]);
         if (enabled) {
+          const diagnostic = (
+            stored?.steps[0].request as {
+              cookieDiagnostics: Record<string, unknown>[];
+            }
+          ).cookieDiagnostics[0];
+          expect(diagnostic).toMatchObject({
+            attempt: 1,
+            explicitCookieHeader: false,
+            wireCaptured: true,
+            missingMatchedCookies: [],
+            additionalSentCookies: [],
+            sentCookies: [{ name: "session", value: "raw-session-value" }],
+            matchedCookies: [
+              { name: "session", value: "raw-session-value", path: "/" },
+            ],
+            unmatchedCookies: [
+              { name: "session", value: "other-path-session", path: "/other" },
+            ],
+          });
+          expect(diagnostic.allCookies).toHaveLength(2);
+          expect(
+            logs.some((line) => line.startsWith("[API_COOKIE_DIAGNOSTICS]")),
+          ).toBe(true);
           expect(stored?.debug?.rawRequestHeaders).toBe(true);
           expect(stored?.steps[0].request).toMatchObject({
             headersSource: "ACTUAL_REQUEST",
@@ -199,6 +224,12 @@ it.each([
           ).toContain("cookie: session=raw-session-value");
           expect(report.steps[0].request).toEqual(stored?.steps[0].request);
         } else {
+          expect(stored?.steps[0].request).not.toHaveProperty(
+            "cookieDiagnostics",
+          );
+          expect(
+            logs.some((line) => line.startsWith("[API_COOKIE_DIAGNOSTICS]")),
+          ).toBe(false);
           for (const value of [
             "raw-session-value",
             "raw-csrf-value",

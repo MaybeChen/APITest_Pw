@@ -1,5 +1,6 @@
 import { retainBrowser } from "./retained-browsers.js";
 import { withRawRequestHeaders } from "./request-headers.js";
+import { snapshotCookies, compareSentCookies } from "./cookie-diagnostics.js";
 import { observeAuthResponses } from "./auth-response.js";
 import { observeUINetwork } from "./ui-network.js";
 import { schedule } from "./scheduler.js";
@@ -405,6 +406,15 @@ export async function run(
         });
         for (let attempt = 0; attempt <= step.retries; attempt++) {
           result.attempts++;
+          const cookieSnapshot =
+            process.env.RUN_LOG_RAW_HEADERS === "true"
+              ? await snapshotCookies(context!, url.href, attempt + 1, headers)
+              : undefined;
+          if (cookieSnapshot) {
+            const request = result.request as Record<string, unknown>;
+            const diagnostics = (request.cookieDiagnostics ??= []) as unknown[];
+            diagnostics.push(cookieSnapshot);
+          }
           const response = await withRawRequestHeaders(
             {
               reportId: report.id,
@@ -413,6 +423,15 @@ export async function run(
               method: a.method,
               url: url.href,
               onHeaders: ({ headers: actualHeaders, rawHeaders }) => {
+                if (cookieSnapshot) {
+                  Object.assign(
+                    cookieSnapshot,
+                    compareSentCookies(cookieSnapshot, actualHeaders),
+                  );
+                  console.info(
+                    `[API_COOKIE_DIAGNOSTICS] ${JSON.stringify({ reportId: report.id, stepId: step.id, ...cookieSnapshot })}`,
+                  );
+                }
                 result.request = {
                   ...(result.request as Record<string, unknown>),
                   headers: actualHeaders,
