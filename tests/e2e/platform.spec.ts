@@ -1526,8 +1526,9 @@ test("selects the execution UI profile in review and preserves approved versions
   await page
     .getByRole("button", { name: "批准并保存版本", exact: true })
     .click();
-  await expect(selector).toBeDisabled();
-  await page.getByRole("button", { name: "创建新版本", exact: true }).click();
+  await expect(
+    page.getByText("该版本已批准并以不可覆盖记录保存。", { exact: true }),
+  ).toBeVisible();
   await expect(selector).toBeEnabled();
   await selector.selectOption("demo-auth");
   await expect(selector).toHaveValue("demo-auth");
@@ -1539,4 +1540,17 @@ test("selects the execution UI profile in review and preserves approved versions
   const saved = (await changedDraft).postDataJSON();
   expect(saved.plan.version).toBe(2);
   expect(saved.plan.authProfileRef).toBe("demo-auth");
+  expect(saved.plan.status).toBe("DRAFT");
+  expect(saved.testCase.version).toBe(2);
+  expect(saved.plan.caseVersion).toBe(2);
+  const storedPlans = (await (await request.get("/api/plans")).json()) as {
+    planId: string;
+    version: number;
+    authProfileRef: string;
+  }[];
+  expect(
+    storedPlans.find(
+      (plan) => plan.planId === saved.plan.planId && plan.version === 1,
+    )?.authProfileRef,
+  ).toBe(id);
 });

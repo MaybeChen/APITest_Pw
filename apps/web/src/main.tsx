@@ -1009,15 +1009,50 @@ function App() {
                   <select
                     aria-label="执行前置 UI"
                     value={bundle.plan.authProfileRef}
-                    disabled={busy || bundle.plan.status === "APPROVED"}
+                    disabled={busy}
                     onChange={(event) => {
+                      if (event.target.value === bundle.plan.authProfileRef)
+                        return;
                       const next = structuredClone(bundle);
+                      const wasApproved = next.plan.status === "APPROVED";
+                      if (wasApproved) {
+                        next.testCase.version =
+                          Math.max(
+                            next.testCase.version,
+                            ...cases
+                              .filter(
+                                (item) => item.caseId === next.testCase.caseId,
+                              )
+                              .map((item) => item.version),
+                          ) + 1;
+                        next.plan.version =
+                          Math.max(
+                            next.plan.version,
+                            ...plans
+                              .filter(
+                                (item) => item.planId === next.plan.planId,
+                              )
+                              .map((item) => item.version),
+                          ) + 1;
+                        next.plan.caseVersion = next.testCase.version;
+                        next.testCase.planVersions = [next.plan.version];
+                        next.testCase.steps.forEach((step) => {
+                          step.review = "NEEDS_REVIEW";
+                        });
+                        next.plan.steps.forEach((step) =>
+                          step.assertions.forEach((assertion) => {
+                            assertion.confirmed = false;
+                          }),
+                        );
+                      }
                       next.plan.authProfileRef = event.target.value;
                       next.plan.status = "DRAFT";
                       next.testCase.status = "DRAFT";
                       edit(next);
                       setNotice(
-                        "已切换执行前置 UI，请保存草稿或批准并保存版本后执行。",
+                        wasApproved
+                          ? "已切换执行前置 UI 并创建新版本草稿，原批准版本保留。请重新审核、批准，并保存新版本的数据集后执行。"
+                          : "已切换执行前置 UI，请保存草稿或批准并保存版本后执行。",
                       );
                     }}
                   >
@@ -1047,7 +1082,7 @@ function App() {
                 </label>
                 <p>
                   仅展示当前计划环境可用的 UI
-                  认证协议。已批准版本请先点击“创建新版本”再切换；新版本需重新批准，并保存对应版本的数据集。
+                  认证协议。已批准版本可直接切换，系统会自动创建新版本草稿；新版本需重新批准，并保存对应版本的数据集。
                 </p>
                 {view === "语义用例" ? (
                   <>
