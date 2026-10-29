@@ -1596,3 +1596,53 @@ test("selects the execution UI profile in review and preserves approved versions
     )?.authProfileRef,
   ).toBe(id);
 });
+
+test("persists a case-insensitive API header blacklist from environment settings", async ({
+  page,
+  request,
+}) => {
+  const id = `header-blacklist-${Date.now()}`;
+  expect(
+    (
+      await request.post("/api/environments", {
+        data: {
+          id,
+          baseURL: "http://127.0.0.1:3100",
+          allowedOrigins: ["http://127.0.0.1:3100"],
+          allowWrites: false,
+          allowHighRisk: false,
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.goto("/");
+  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "编辑环境", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "已保存配置", exact: true })
+    .selectOption(id);
+  const field = page.getByRole("textbox", {
+    name: "API 请求 Header 黑名单",
+    exact: true,
+  });
+  await field.fill("X-Gde-Src-Page");
+  await field.press("End");
+  await field.press("Enter");
+  await expect(field).toHaveValue("X-Gde-Src-Page\n");
+  await field.pressSequentially("X-Adc-Page-Token");
+  await page.getByRole("button", { name: "保存配置", exact: true }).click();
+  await expect(
+    page.getByText("配置已保存；后续验证和回放使用最新配置。", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "编辑环境", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "已保存配置", exact: true })
+    .selectOption(id);
+  await expect(field).toHaveValue("x-gde-src-page\nx-adc-page-token");
+  const environments = await (await request.get("/api/environments")).json();
+  expect(
+    environments.find((item: { id: string }) => item.id === id).headerBlacklist,
+  ).toEqual(["x-gde-src-page", "x-adc-page-token"]);
+});

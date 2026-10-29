@@ -379,6 +379,16 @@ export const environmentSchema = z.object({
   allowHighRisk: z.boolean().default(false),
   ignoreHTTPSErrors: z.boolean().default(false),
   recordingRequestDomains: z.array(requestDomainRuleSchema).optional(),
+  headerBlacklist: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, "Invalid HTTP header name")
+        .transform((value) => value.toLowerCase()),
+    )
+    .optional(),
 });
 export const datasetSchema = z
   .object({

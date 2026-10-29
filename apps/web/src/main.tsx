@@ -1,3 +1,4 @@
+import { HeaderBlacklist } from "./components/HeaderBlacklist";
 import { UIFlowRecorder } from "./components/UIFlowRecorder";
 import { RecordingHistory } from "./components/RecordingHistory";
 import type { Generation } from "../../../packages/planner/src/workflow";
@@ -1597,6 +1598,32 @@ function App() {
                 当前配置类型：{configKind}。修改 id
                 可新建配置。保存后写入本地数据库，刷新或重启后仍可选择。
               </p>
+              {configKind === "environments" && (
+                <HeaderBlacklist
+                  value={(() => {
+                    try {
+                      const names = JSON.parse(configText).headerBlacklist;
+                      return Array.isArray(names)
+                        ? names.filter(
+                            (name): name is string => typeof name === "string",
+                          )
+                        : [];
+                    } catch {
+                      return [];
+                    }
+                  })()}
+                  onChange={(names) => {
+                    try {
+                      const config = JSON.parse(configText);
+                      config.headerBlacklist = names;
+                      setConfigText(JSON.stringify(config, null, 2));
+                      setConfigDirty(true);
+                    } catch {
+                      setError("请先修正环境配置 JSON，再编辑 Header 黑名单。");
+                    }
+                  }}
+                />
+              )}
               <textarea
                 className="json"
                 aria-label="环境配置 JSON"

@@ -389,10 +389,14 @@ export async function run(
             step.resourceVariable!,
           );
         const headers: Record<string, string> = {};
+        const headerBlacklist = new Set(
+          (env.headerBlacklist ?? []).map((name) => name.toLowerCase()),
+        );
         for (const [k, b] of Object.entries({
           ...authProfile.headers,
           ...step.headers,
         })) {
+          if (headerBlacklist.has(k.toLowerCase())) continue;
           const value = resolve(b, vars, auth, testData);
           if (value !== undefined) headers[k] = String(value);
         }
@@ -406,6 +410,7 @@ export async function run(
           method: a.method,
           headers,
           body,
+          headerBlacklist: [...headerBlacklist],
         });
         for (let attempt = 0; attempt <= step.retries; attempt++) {
           result.attempts++;
@@ -425,6 +430,7 @@ export async function run(
               attempt: attempt + 1,
               method: a.method,
               url: url.href,
+              headerBlacklist: [...headerBlacklist],
               onHeaders: ({ headers: actualHeaders, rawHeaders }) => {
                 if (cookieSnapshot) {
                   Object.assign(
@@ -486,6 +492,7 @@ export async function run(
                 ...authProfile.headers,
                 ...step.headers,
               })) {
+                if (headerBlacklist.has(k.toLowerCase())) continue;
                 const value = resolve(b, vars, auth, testData);
                 if (value !== undefined) headers[k] = String(value);
               }

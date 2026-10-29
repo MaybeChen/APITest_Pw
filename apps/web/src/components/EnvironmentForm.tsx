@@ -14,6 +14,7 @@ export function EnvironmentForm({
   const [hostPatterns, setHostPatterns] = useState("");
   const [requestDomains, setRequestDomains] = useState("");
   const [requestPatterns, setRequestPatterns] = useState("");
+  const [headerBlacklist, setHeaderBlacklist] = useState("");
   const [allowWrites, setAllowWrites] = useState(false);
   const [allowHighRisk, setAllowHighRisk] = useState(false);
   const [ignoreHTTPSErrors, setIgnoreHTTPSErrors] = useState(false);
@@ -79,6 +80,9 @@ export function EnvironmentForm({
               allowWrites,
               allowHighRisk,
               ignoreHTTPSErrors,
+              headerBlacklist: headerBlacklist
+                .split(/[\s,，]+/)
+                .filter(Boolean),
             });
           } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -138,6 +142,19 @@ export function EnvironmentForm({
         <p>
           正则只匹配域名，不包含协议、路径或 / 分隔符；默认仅允许 HTTPS。使用
           (^|\.)huawei\.com$ 可包含根域名及其子域名。
+        </p>
+        <h3>API 执行设置</h3>
+        <label>
+          API 请求 Header 黑名单
+          <textarea
+            value={headerBlacklist}
+            onChange={(event) => setHeaderBlacklist(event.target.value)}
+            placeholder="可选；每行一个字段名，例如 x-gde-src-page；不区分大小写"
+          />
+        </label>
+        <p>
+          仅影响计划执行的 API 请求，不修改前置 UI
+          或录制流量。留空不排除任何字段。
         </p>
         <h3>录制请求白名单</h3>
         <label>
