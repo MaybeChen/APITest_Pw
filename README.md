@@ -24,7 +24,7 @@ pnpm web      # 前端 :5173
 
 在“环境配置”中添加站点 origin 和 UI AuthProfile；所有导航及 API URL 必须属于显式允许的环境。新建录制选择对应环境；生成后将 Plan 的 `authProfileRef` 设为对应协议。前置 UI 录制会将填写和下拉选择的实际值保存为动作 `value`，回放直接使用，不需要配置 `UI_INPUT_*` 环境变量。动作 JSON 可编辑；旧动作可删除 `secretRef` 并填写 `value`，也可以继续使用 `secretRef` 引用后端环境变量。CSRF 等动态认证来源仍通过前置接口提取，不写成固定 Token。
 
-AuthProfile 支持 navigate/click/fill/waitForURL/waitForSelector/assertVisible，`readySelector` 为必填。就绪元素可见后，等待同一浏览器上下文中所有页面的 HTTP 请求结束，并连续 1 秒无新请求，再提取认证信息和执行 API；网络等待最多 30 秒，超时停止并报错。持续轮询或流式请求可能导致网络等待超时。人工 MFA 可在可见浏览器中完成，受默认 Playwright 超时限制。localStorage Token 必须显式配置 `tokenSources` 和 `AUTH_CONTEXT` Header；例如 Token source 可指定 `prefix: "Bearer "`。不执行浏览器 Axios 拦截器或任意生成代码。
+AuthProfile 支持 navigate/click/fill/waitForURL/waitForSelector/assertVisible，`readySelector` 为必填。回放导航完成后、开始填写前会等待网络连续空闲 1 秒；点击或 Enter 提交前再次等待网络稳定并检查仍可见的已填写字段。字段被页面重置时停止执行，错误不包含输入值。就绪元素可见后，等待同一浏览器上下文中所有页面的 HTTP 请求结束，并连续 1 秒无新请求，再提取认证信息和执行 API；网络等待最多 30 秒，超时停止并报错。持续轮询或流式请求可能导致网络等待超时。人工 MFA 可在可见浏览器中完成，受默认 Playwright 超时限制。localStorage Token 必须显式配置 `tokenSources` 和 `AUTH_CONTEXT` Header；例如 Token source 可指定 `prefix: "Bearer "`。不执行浏览器 Axios 拦截器或任意生成代码。
 
 调试前置 UI 回放时，先停止已有后端，再运行 `pnpm dev:headed`（等价于 `pnpm dev --headed`，也兼容 `--head`），然后在界面执行数据集。后端会启动可见 Chromium，UI 操作默认放慢 500 毫秒；浏览器窗口显示在运行后端的机器上，需要可用桌面 / DISPLAY。`RUN_HEADLESS=false` 仍可单独启用有头回放，`RUN_SLOW_MO_MS` 可调整操作延迟（0–5000 毫秒）。普通 `pnpm dev` 保持默认无头执行。API 使用同一 BrowserContext 的 `context.request` 共享 Cookie，API 调用不是页面点击，其请求和响应在运行报告中查看。
 

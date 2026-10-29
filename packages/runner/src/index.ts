@@ -46,6 +46,36 @@ export async function uiAuthenticate(
     throw new Error("UI flow environment mismatch");
   const responses = observeAuthResponses(context, profile, env);
   const network = observeUINetwork(context);
+  const filled = new Map<string, string>();
+  let inputPageReady = false;
+  const navigated = () => {
+    filled.clear();
+    inputPageReady = false;
+  };
+  const onNavigation = (frame: import("playwright").Frame) => {
+    if (frame === page.mainFrame()) navigated();
+  };
+  page.on("framenavigated", onNavigation);
+  const checkFilled = async () => {
+    for (const [target, expected] of filled) {
+      const locator = page.locator(target);
+      // Hidden fields may belong to an earlier step of a multi-page form.
+      if (!(await locator.isVisible())) continue;
+      const matches = await locator.evaluate(
+        (element, value) =>
+          element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement
+            ? element.value === value
+            : element.textContent === value,
+        expected,
+      );
+      if (!matches)
+        throw new Error(
+          `前置 UI 输入校验失败：${target} 的值在填写后发生变化，已停止后续操作；请检查页面初始化或重渲染`,
+        );
+    }
+  };
   try {
     for (const action of profile.actions) {
       switch (action.type) {
@@ -53,6 +83,8 @@ export async function uiAuthenticate(
           await page.goto(
             allowedURL(new URL(action.target, env.baseURL).href, env),
           );
+          await network.wait();
+          inputPageReady = true;
           break;
         case "fill": {
           const value = action.secretRef
@@ -60,7 +92,17 @@ export async function uiAuthenticate(
             : action.value;
           if (value === undefined)
             throw new Error(`Missing UI input reference ${action.secretRef}`);
+          // Also covers profiles starting on an existing page or forms opened by a click.
+          if (!inputPageReady) {
+            await page.waitForLoadState("domcontentloaded");
+            await network.wait();
+            inputPageReady = true;
+          }
+          filled.delete(action.target);
+          await checkFilled();
           await page.locator(action.target).fill(value);
+          filled.set(action.target, value);
+          await checkFilled();
           break;
         }
         case "selectOption": {
@@ -74,13 +116,25 @@ export async function uiAuthenticate(
         }
         case "press":
           if (!action.value) throw new Error("Missing UI key");
+          if (action.value === "Enter" && filled.size) {
+            await network.wait();
+            await checkFilled();
+          }
           await page.locator(action.target).press(action.value);
+          inputPageReady = false;
           break;
         case "click":
+          if (filled.size) {
+            await network.wait();
+            await checkFilled();
+          }
           await page.locator(action.target).click();
+          inputPageReady = false;
           break;
         case "waitForURL":
           await page.waitForURL(action.target);
+          await network.wait();
+          inputPageReady = true;
           break;
         case "waitForSelector":
         case "assertVisible":
@@ -145,6 +199,7 @@ export async function uiAuthenticate(
     }
     return auth;
   } finally {
+    page.off("framenavigated", onNavigation);
     network.close();
     responses.close();
   }
