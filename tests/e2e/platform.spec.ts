@@ -1390,3 +1390,58 @@ test("shows complete raw headers from a saved debug authentication failure repor
   await expect(detail).toContainText('"host": "example.test"');
   await expect(detail).not.toContainText("[REDACTED]");
 });
+
+test("deletes UI authentication and environment configurations from settings", async ({
+  page,
+  request,
+}) => {
+  const id = `delete-config-${Date.now()}`;
+  const env = await request.post("/api/environments", {
+    data: {
+      id,
+      baseURL: "http://127.0.0.1:3100",
+      allowedOrigins: ["http://127.0.0.1:3100"],
+      allowWrites: false,
+      allowHighRisk: false,
+    },
+  });
+  expect(env.ok()).toBe(true);
+  const auth = await request.post("/api/auth-profiles", {
+    data: {
+      id: `${id}-ui`,
+      environmentRef: id,
+      actions: [],
+      readySelector: "body",
+      headers: {},
+      tokenSources: {},
+    },
+  });
+  expect(auth.ok()).toBe(true);
+  await page.goto("/");
+  await page.getByRole("button", { name: "配置", exact: true }).click();
+  await page
+    .getByRole("button", { name: "编辑 UI AuthProfile", exact: true })
+    .click();
+  const select = page.getByRole("combobox", { name: "已保存配置" });
+  await select.selectOption(`${id}-ui`);
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("button", { name: "删除 UI 认证协议", exact: true })
+    .click();
+  await expect(select).toHaveValue(`${id}-ui`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "删除 UI 认证协议", exact: true })
+    .click();
+  await expect(
+    page.getByText("UI 认证协议已删除。", { exact: true }),
+  ).toBeVisible();
+  await expect(select.locator(`option[value="${id}-ui"]`)).toHaveCount(0);
+  await page.getByRole("button", { name: "编辑环境", exact: true }).click();
+  await select.selectOption(id);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "删除环境", exact: true }).click();
+  await expect(page.getByText("环境已删除。", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(select.locator(`option[value="${id}"]`)).toHaveCount(0);
+});

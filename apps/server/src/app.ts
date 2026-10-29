@@ -52,10 +52,15 @@ import { demoArtifacts, demoEnv, demoAuth } from "./demo.js";
 export async function createApp(store = new Store(), provider?: AIProvider) {
   const aiProvider = provider ?? createConfiguredAIProvider();
   await store.init();
-  if (!(await store.get("environment", demoEnv.id)))
-    await store.put("environment", demoEnv.id, 1, demoEnv);
-  if (!(await store.get("auth", demoAuth.id)))
-    await store.put("auth", demoAuth.id, 1, demoAuth);
+  if (!(await store.get("initialization", "default-configurations"))) {
+    if (!(await store.get("environment", demoEnv.id)))
+      await store.put("environment", demoEnv.id, 1, demoEnv);
+    if (!(await store.get("auth", demoAuth.id)))
+      await store.put("auth", demoAuth.id, 1, demoAuth);
+    await store.put("initialization", "default-configurations", 1, {
+      initialized: true,
+    });
+  }
   async function envFor(id: string) {
     const env = await store.get<Environment>("environment", id);
     if (!env) throw new Error("Environment not configured");
@@ -89,6 +94,44 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   });
   app.get("/api/environments", async () => store.latest("environment"));
   app.get("/api/auth-profiles", async () => store.latest("auth"));
+  for (const [path, kind] of [
+    ["environments", "environment"],
+    ["auth-profiles", "auth"],
+  ] as const) {
+    app.delete<{ Params: { id: string } }>(
+      `/api/${path}/:id`,
+      async (req, reply) => {
+        const { id } = req.params;
+        if (
+          busy ||
+          sessions.size ||
+          uiSessions.size ||
+          activeGenerations.size ||
+          generationActions.size
+        )
+          return reply
+            .code(409)
+            .send({
+              error: "存在录制、生成或执行中的任务，请结束后再删除配置。",
+            });
+        if (!(await store.get(kind, id)))
+          return reply.code(404).send({ error: "配置不存在或已删除。" });
+        if (kind === "environment") {
+          const profiles = (await store.latest<AuthProfile>("auth")).filter(
+            (profile) => profile.environmentRef === id,
+          );
+          if (profiles.length)
+            return reply
+              .code(409)
+              .send({
+                error: `环境仍被 UI 认证协议引用：${profiles.map((profile) => profile.id).join("、")}。请先删除或修改这些协议。`,
+              });
+        }
+        await store.remove(kind, id);
+        return reply.code(204).send();
+      },
+    );
+  }
   app.post("/api/environments", async (req, reply) => {
     const data = environmentSchema.parse(req.body);
     const { createOnly } = z

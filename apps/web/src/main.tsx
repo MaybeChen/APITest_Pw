@@ -269,6 +269,9 @@ function App() {
     if (selected) {
       setConfigId(selected.id);
       setConfigText(JSON.stringify(selected, null, 2));
+    } else {
+      setConfigId("");
+      setConfigText("");
     }
   }, [
     configKind,
@@ -1541,6 +1544,42 @@ function App() {
                 }
               >
                 保存配置
+              </button>
+              <button
+                className="secondary"
+                disabled={
+                  busy ||
+                  !configId ||
+                  !(
+                    configKind === "environments" ? environments : authProfiles
+                  ).some((item) => item.id === configId)
+                }
+                onClick={() => {
+                  const label =
+                    configKind === "environments" ? "环境" : "UI 认证协议";
+                  if (
+                    !window.confirm(
+                      `删除${label}“${configId}”？所有配置版本将被删除；历史用例、计划和报告保留，引用此配置的计划需重新配置后才能执行。`,
+                    )
+                  )
+                    return;
+                  void task(async () => {
+                    await api(
+                      `/${configKind}/${encodeURIComponent(configId)}`,
+                      undefined,
+                      "DELETE",
+                    );
+                    setConfigDirty(false);
+                    setConfigId("");
+                    setConfigText("");
+                    await refresh();
+                    setNotice(`${label}已删除。`);
+                  });
+                }}
+              >
+                {configKind === "environments"
+                  ? "删除环境"
+                  : "删除 UI 认证协议"}
               </button>
             </section>
           </>

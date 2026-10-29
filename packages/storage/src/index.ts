@@ -111,6 +111,11 @@ export class Store {
       })
       .map((row) => row.data as T);
   }
+  async remove(kind: string, entityId: string) {
+    await this.db
+      .delete(documents)
+      .where(and(eq(documents.kind, kind), eq(documents.entityId, entityId)));
+  }
   async list<T>(kind: string): Promise<T[]> {
     return (
       await this.db

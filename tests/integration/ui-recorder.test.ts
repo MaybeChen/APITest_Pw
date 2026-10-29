@@ -62,6 +62,18 @@ it("records literal UI inputs, persists the profile, and replays without input e
       payload: { target: baseURL + "/login", environmentRef: env.id },
     });
     expect(started.statusCode, started.body).toBe(200);
+    expect(
+      (await app.inject({ method: "DELETE", url: "/api/environments/ui-test" }))
+        .statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: "/api/auth-profiles/demo-ui",
+        })
+      ).statusCode,
+    ).toBe(409);
     const id = started.json().id;
     expect(
       (
