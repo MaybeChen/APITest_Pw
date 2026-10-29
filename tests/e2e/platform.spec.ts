@@ -1458,3 +1458,85 @@ test("deletes UI authentication and environment configurations from settings", a
   await page.reload();
   await expect(select.locator(`option[value="${id}"]`)).toHaveCount(0);
 });
+
+test("selects the execution UI profile in review and preserves approved versions", async ({
+  page,
+  request,
+}) => {
+  const id = `review-ui-${Date.now()}`;
+  expect(
+    (
+      await request.post("/api/auth-profiles", {
+        data: {
+          id,
+          environmentRef: "demo",
+          actions: [],
+          headers: {},
+          tokenSources: {},
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  const foreignEnv = `${id}-env`;
+  expect(
+    (
+      await request.post("/api/environments", {
+        data: {
+          id: foreignEnv,
+          baseURL: "http://127.0.0.1:3100",
+          allowedOrigins: ["http://127.0.0.1:3100"],
+          allowWrites: false,
+          allowHighRisk: false,
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await request.post("/api/auth-profiles", {
+        data: {
+          id: `${id}-foreign`,
+          environmentRef: foreignEnv,
+          actions: [],
+          headers: {},
+          tokenSources: {},
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.goto("/");
+  await page.getByRole("button", { name: "历史记录", exact: true }).click();
+  await page.getByRole("button", { name: "载入订单演示模板" }).click();
+  const selector = page.getByRole("combobox", {
+    name: "执行前置 UI",
+    exact: true,
+  });
+  await expect(selector).toBeEnabled();
+  await expect(selector.locator(`option[value="${id}-foreign"]`)).toHaveCount(
+    0,
+  );
+  await selector.selectOption(id);
+  const draftRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/drafts") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click();
+  expect((await draftRequest).postDataJSON().plan.authProfileRef).toBe(id);
+  await page.getByRole("button", { name: "我已审查预期、断言与资产" }).click();
+  await page
+    .getByRole("button", { name: "批准并保存版本", exact: true })
+    .click();
+  await expect(selector).toBeDisabled();
+  await page.getByRole("button", { name: "创建新版本", exact: true }).click();
+  await expect(selector).toBeEnabled();
+  await selector.selectOption("demo-auth");
+  await expect(selector).toHaveValue("demo-auth");
+  const changedDraft = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/drafts") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click();
+  const saved = (await changedDraft).postDataJSON();
+  expect(saved.plan.version).toBe(2);
+  expect(saved.plan.authProfileRef).toBe("demo-auth");
+});

@@ -1004,6 +1004,51 @@ function App() {
                     {bundle.plan.version} · {bundle.plan.status}
                   </span>
                 </div>
+                <label>
+                  执行前置 UI
+                  <select
+                    aria-label="执行前置 UI"
+                    value={bundle.plan.authProfileRef}
+                    disabled={busy || bundle.plan.status === "APPROVED"}
+                    onChange={(event) => {
+                      const next = structuredClone(bundle);
+                      next.plan.authProfileRef = event.target.value;
+                      next.plan.status = "DRAFT";
+                      next.testCase.status = "DRAFT";
+                      edit(next);
+                      setNotice(
+                        "已切换执行前置 UI，请保存草稿或批准并保存版本后执行。",
+                      );
+                    }}
+                  >
+                    {!authProfiles.some(
+                      (profile) =>
+                        profile.id === bundle.plan.authProfileRef &&
+                        (!profile.environmentRef ||
+                          profile.environmentRef ===
+                            bundle.plan.environmentRef),
+                    ) && (
+                      <option value={bundle.plan.authProfileRef} disabled>
+                        {bundle.plan.authProfileRef}（未配置或环境不匹配）
+                      </option>
+                    )}
+                    {authProfiles
+                      .filter(
+                        (profile) =>
+                          !profile.environmentRef ||
+                          profile.environmentRef === bundle.plan.environmentRef,
+                      )
+                      .map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.id}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <p>
+                  仅展示当前计划环境可用的 UI
+                  认证协议。已批准版本请先点击“创建新版本”再切换；新版本需重新批准，并保存对应版本的数据集。
+                </p>
                 {view === "语义用例" ? (
                   <>
                     <p>{bundle.testCase.objective}</p>
