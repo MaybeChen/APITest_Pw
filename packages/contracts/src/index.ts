@@ -306,7 +306,7 @@ export const authSchema = z.object({
   recordingRef: id.optional(),
   environmentRef: id.optional(),
   actions: z.array(action),
-  readySelector: id,
+  readySelector: z.string().trim().optional(),
   headers: z.record(z.string(), binding).default({}),
   tokenSources: z
     .record(

@@ -1063,6 +1063,9 @@ test("records, reviews and saves a reusable precondition UI profile from configu
   await expect(
     page.getByRole("heading", { name: "前置 UI 流程录制" }),
   ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "前置 UI 环境", exact: true })
+    .selectOption("demo");
   await page.getByLabel("前置 UI 起始地址").fill(snapshot.target);
   await page
     .getByRole("button", { name: "开始前置 UI 录制", exact: true })
@@ -1115,6 +1118,16 @@ test("records, reviews and saves a reusable precondition UI profile from configu
     target: "#password",
     value: "recorded-password",
   });
+  await page.getByLabel("前置 UI 就绪元素").fill("");
+  const saveWithoutSelector = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/api/auth-profiles") &&
+      request.method() === "POST",
+  );
+  await page
+    .getByRole("button", { name: "保存前置 UI 协议", exact: true })
+    .click();
+  expect((await saveWithoutSelector).postDataJSON().readySelector).toBe("");
 });
 
 test("keeps confirmed case while prerequisite configuration is missing and switches the profile before compiling", async ({

@@ -5,9 +5,13 @@ import { uiAuthenticate } from "../../packages/runner/src/index";
 import { demoEnv } from "../../apps/server/src/demo";
 import type { AuthProfile } from "../../packages/contracts/src/index";
 
-it.each([false, true])(
-  "waits for login initialization and blocks reset fields (reset=%s)",
-  async (reset) => {
+it.each([
+  { reset: false, selector: undefined },
+  { reset: false, selector: "  " },
+  { reset: true, selector: "#ready" },
+])(
+  "waits for login initialization and blocks reset fields (reset=$reset, selector=$selector)",
+  async ({ reset, selector }) => {
     let submissions = 0;
     let submittedUser: string | null = null;
     const server = createServer((req, res) => {
@@ -47,7 +51,7 @@ it.each([false, true])(
           { type: "fill", target: "#password", value: "private-password" },
           { type: "click", target: "#login" },
         ],
-        readySelector: "#ready",
+        readySelector: selector,
         headers: {},
         tokenSources: {},
         reauthenticateReads: false,

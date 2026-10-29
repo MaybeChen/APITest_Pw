@@ -187,7 +187,7 @@ export function UIFlowRecorder({
               );
               setHistory(await api<Snapshot[]>("/ui-recordings"));
               setNotice(
-                "录制已保存，填写值已记录。请审核动作并填写登录成功后的就绪元素。",
+                "录制已保存，填写值已记录。请审核动作，可选填登录成功后的就绪元素。",
               );
             })
           }
@@ -267,12 +267,12 @@ export function UIFlowRecorder({
               disabled={active || busy}
               value={readySelector}
               onChange={(e) => setReadySelector(e.target.value)}
-              placeholder="登录后稳定可见的 CSS 选择器"
+              placeholder="可选，留空仅等待网络稳定"
             />
           </label>
           <p>
-            就绪元素可见后，还会等待所有页面的 HTTP 请求结束，并连续 1
-            秒没有新请求，再开始调用 API。网络等待最多 30
+            就绪元素为可选项；填写时先等待元素可见。随后等待所有页面的 HTTP
+            请求结束，并连续 1 秒没有新请求，再开始调用 API。网络等待最多 30
             秒，超时停止执行；轮询或流式请求可能导致超时。
           </p>
           <p>
@@ -304,9 +304,7 @@ export function UIFlowRecorder({
             />
           </label>
           <button
-            disabled={
-              active || busy || !profileId.trim() || !readySelector.trim()
-            }
+            disabled={active || busy || !profileId.trim()}
             onClick={() =>
               void task(async () => {
                 const profile = await api<AuthProfile>("/auth-profiles", {

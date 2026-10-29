@@ -143,7 +143,10 @@ export async function uiAuthenticate(
           break;
       }
     }
-    await page.locator(profile.readySelector).waitFor({ state: "visible" });
+    if (profile.readySelector?.trim())
+      await page
+        .locator(profile.readySelector.trim())
+        .waitFor({ state: "visible" });
     await network.wait();
     const auth: Record<string, string> = {};
     for (const [name, source] of Object.entries(profile.tokenSources)) {
