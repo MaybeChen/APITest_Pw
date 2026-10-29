@@ -428,6 +428,7 @@ export type Binding = z.infer<typeof binding>;
 export type AuthProfile = z.infer<typeof authSchema>;
 export type Environment = z.infer<typeof environmentSchema>;
 export interface StepResult {
+  retryable?: boolean;
   stepId: string;
   semanticStepRef: string;
   phase: string;
@@ -441,6 +442,8 @@ export interface StepResult {
   error?: string;
 }
 export interface Report {
+  retrySession?: { reportId: string };
+  retryOf?: { reportId: string; stepId: string; sessionReportId: string };
   debug?: { rawRequestHeaders: boolean; browserRetained?: boolean };
   dataset?: { id: string; version: number; rowId: string; rowName: string };
   batchId?: string;

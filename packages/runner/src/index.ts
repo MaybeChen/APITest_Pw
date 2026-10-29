@@ -1,4 +1,4 @@
-import { retainBrowser } from "./retained-browsers.js";
+import { retainBrowser, type RetryStep } from "./retained-browsers.js";
 import { withRawRequestHeaders } from "./request-headers.js";
 import { snapshotCookies, compareSentCookies } from "./cookie-diagnostics.js";
 import { observeAuthResponses } from "./auth-response.js";
@@ -294,6 +294,7 @@ export async function run(
     vars: Record<string, unknown> = {};
   let context: BrowserContext | undefined;
   let browser: Browser | undefined;
+  let retryStep: RetryStep | undefined;
   try {
     const headless = process.env.RUN_HEADLESS !== "false";
     const configuredSlowMo = Number(
@@ -335,7 +336,13 @@ export async function run(
         auth,
       );
     let stopped = false;
-    const execute = async (step: Plan["steps"][number]) => {
+    const snapshots = new Map<string, Record<string, unknown>>();
+    const execute = async (
+      step: Plan["steps"][number],
+      targetReport = report,
+      manualRetry = false,
+    ) => {
+      const report = targetReport;
       const result: StepResult = {
         stepId: step.id,
         semanticStepRef: step.semanticStepRef,
@@ -362,13 +369,30 @@ export async function run(
       const dependencyFailed = step.dependsOn.some(
         (d) => report.steps.find((s) => s.stepId === d)?.status !== "PASSED",
       );
-      if ((stopped || dependencyFailed) && step.phase !== "CLEANUP") {
+      if (
+        !manualRetry &&
+        (stopped || dependencyFailed) &&
+        step.phase !== "CLEANUP"
+      ) {
         result.status = "SKIPPED";
         result.error = "Dependency failed or run stopped";
         result.endedAt = Date.now();
         report.steps.push(result);
         return;
       }
+      const asset = assets.find(
+        (item) =>
+          item.apiId === step.apiId && item.version === (step.apiVersion ?? 1),
+      );
+      result.retryable =
+        step.phase === "API" &&
+        !!asset &&
+        ["GET", "HEAD"].includes(asset.method) &&
+        asset.risk === "READ" &&
+        !step.ownsResource &&
+        !step.requiresOwnership;
+      if (!manualRetry && result.retryable)
+        snapshots.set(step.id, structuredClone(vars));
       try {
         const a = assets.find(
           (a) => a.apiId === step.apiId && a.version === (step.apiVersion ?? 1),
@@ -483,6 +507,7 @@ export async function run(
           if (response.status() === 401 || loginRedirect) {
             if (
               response.status() === 401 &&
+              !manualRetry &&
               a.risk === "READ" &&
               authProfile.reauthenticateReads &&
               attempt < step.retries
@@ -607,11 +632,50 @@ export async function run(
         }
       } catch (e) {
         result.error = String(redact(String(e)));
-        if (step.failurePolicy === "STOP" && step.phase !== "CLEANUP")
+        if (
+          !manualRetry &&
+          step.failurePolicy === "STOP" &&
+          step.phase !== "CLEANUP"
+        )
           stopped = true;
       } finally {
         result.endedAt = Date.now();
         report.steps.push(result);
+      }
+    };
+    retryStep = async (source, stepId) => {
+      const step = p.steps.find((item) => item.id === stepId);
+      const snapshot = snapshots.get(stepId);
+      if (!step || !snapshot)
+        throw new Error("仅支持重试原运行中已执行的 GET/HEAD 查询步骤。");
+      const backup = structuredClone(vars);
+      const retry: Report = {
+        ...structuredClone(source),
+        id: randomUUID(),
+        retryOf: { reportId: source.id, stepId, sessionReportId: report.id },
+        retrySession: { reportId: report.id },
+        startedAt: Date.now(),
+        endedAt: 0,
+        status: "FAILED",
+        auth: { status: "READY" },
+        steps: [],
+        resources: [],
+        residualResources: [],
+        cleanupStatus: "NOT_RUN",
+      };
+      try {
+        for (const key of Object.keys(vars)) delete vars[key];
+        Object.assign(vars, structuredClone(snapshot));
+        await execute({ ...step, retries: 0 }, retry, true);
+        retry.status =
+          retry.steps[0]?.status === "PASSED" && retry.auth.status === "READY"
+            ? "PASSED"
+            : "FAILED";
+        retry.endedAt = Date.now();
+        return redactReport(retry);
+      } finally {
+        for (const key of Object.keys(vars)) delete vars[key];
+        Object.assign(vars, backup);
       }
     };
     const steps = ordered(p.steps);
@@ -636,7 +700,9 @@ export async function run(
       context &&
       context.pages().some((page) => !page.isClosed())
     ) {
-      retainBrowser(report.id, browser, context);
+      retainBrowser(report.id, browser, context, retryStep);
+      if (retryStep && report.steps.some((step) => step.retryable))
+        report.retrySession = { reportId: report.id };
       report.debug = {
         rawRequestHeaders: report.debug?.rawRequestHeaders ?? false,
         browserRetained: true,

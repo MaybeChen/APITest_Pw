@@ -1,16 +1,19 @@
 import type { Browser, BrowserContext } from "playwright";
+import type { Report } from "../../contracts/src/index.js";
+export type RetryStep = (source: Report, stepId: string) => Promise<Report>;
 
 const retained = new Map<
   string,
-  { browser: Browser; context: BrowserContext }
+  { browser: Browser; context: BrowserContext; retryStep?: RetryStep }
 >();
 
 export function retainBrowser(
   reportId: string,
   browser: Browser,
   context: BrowserContext,
+  retryStep?: RetryStep,
 ) {
-  retained.set(reportId, { browser, context });
+  retained.set(reportId, { browser, context, retryStep });
   const closeWhenEmpty = () => {
     if (
       !retained.has(reportId) ||

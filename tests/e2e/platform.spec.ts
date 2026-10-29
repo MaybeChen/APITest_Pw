@@ -1646,3 +1646,85 @@ test("persists a case-insensitive API header blacklist from environment settings
     environments.find((item: { id: string }) => item.id === id).headerBlacklist,
   ).toEqual(["x-gde-src-page", "x-adc-page-token"]);
 });
+
+test("retries one report step and displays a separate result without replacing the original", async ({
+  page,
+}) => {
+  const original: any = {
+    id: "retry-source-ui",
+    caseId: "retry-case",
+    caseVersion: 1,
+    planId: "retry-plan",
+    planVersion: 1,
+    startedAt: 1,
+    endedAt: 2,
+    status: "FAILED",
+    auth: { status: "READY" },
+    cleanupStatus: "PASSED",
+    resources: [],
+    residualResources: [],
+    retrySession: { reportId: "retry-source-ui" },
+    debug: { rawRequestHeaders: false, browserRetained: true },
+    semanticSteps: [
+      { id: "semantic-read", title: "查询详情", expected: "返回详情" },
+    ],
+    steps: [
+      {
+        stepId: "read-detail",
+        semanticStepRef: "semantic-read",
+        phase: "API",
+        status: "FAILED",
+        startedAt: 1,
+        endedAt: 2,
+        attempts: 1,
+        assertions: [],
+        retryable: true,
+        error: "Assertion failed",
+      },
+    ],
+  };
+  const reports = [original];
+  let retryCalls = 0;
+  await page.route("**/api/reports", (route) =>
+    route.fulfill({ json: reports }),
+  );
+  await page.route(
+    "**/api/reports/retry-source-ui/steps/read-detail/retry",
+    async (route) => {
+      expect(route.request().method()).toBe("POST");
+      retryCalls++;
+      const retry = {
+        ...original,
+        id: "retry-result-ui",
+        status: "PASSED",
+        retryOf: {
+          reportId: original.id,
+          stepId: "read-detail",
+          sessionReportId: original.id,
+        },
+        cleanupStatus: "NOT_RUN",
+        steps: [{ ...original.steps[0], status: "PASSED", error: undefined }],
+      };
+      reports.unshift(retry);
+      await route.fulfill({ json: retry });
+    },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "运行报告", exact: true }).click();
+  await page.getByRole("button", { name: /^FAILED/ }).click();
+  await page.getByText("FAILED · read-detail", { exact: false }).click();
+  await page.getByRole("button", { name: "重试此步骤", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "运行结果 PASSED" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("单步重试完成，结果已单独保存；原报告保留。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(retryCalls).toBe(1);
+  await page.getByRole("button", { name: /^FAILED/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "运行结果 FAILED" }),
+  ).toBeVisible();
+});

@@ -1,4 +1,7 @@
-import { closeRetainedBrowsers } from "../../../packages/runner/src/retained-browsers.js";
+import {
+  closeRetainedBrowsers,
+  getRetainedBrowser,
+} from "../../../packages/runner/src/retained-browsers.js";
 import { UIRecorder } from "../../../packages/recorder/src/ui-recorder.js";
 import {
   createPipeline,
@@ -272,7 +275,55 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
   app.get("/api/cases", async () => store.list<TestCase>("case"));
   app.get("/api/plans", async () => store.list<Plan>("plan"));
   app.get("/api/assets", async () => store.list<Asset>("asset"));
-  app.get("/api/reports", async () => store.list<Report>("report"));
+  app.get("/api/reports", async () =>
+    (await store.list<Report>("report")).map((report) => ({
+      ...report,
+      retrySession:
+        report.retrySession &&
+        getRetainedBrowser(report.retrySession.reportId)?.retryStep
+          ? report.retrySession
+          : undefined,
+    })),
+  );
+  app.post<{ Params: { id: string; stepId: string } }>(
+    "/api/reports/:id/steps/:stepId/retry",
+    async (req, reply) => {
+      if (busy)
+        return reply
+          .code(409)
+          .send({ error: "已有执行任务，请结束后再重试。" });
+      busy = true;
+      try {
+        const source = await store.get<Report>("report", req.params.id);
+        if (!source) return reply.code(404).send({ error: "运行报告不存在。" });
+        const step = source.steps.find(
+          (item) => item.stepId === req.params.stepId,
+        );
+        if (!step?.retryable)
+          return reply
+            .code(409)
+            .send({
+              error:
+                "仅支持重试已执行的 GET/HEAD 查询步骤，不自动重放写操作或跳过的步骤。",
+            });
+        const session =
+          source.retrySession &&
+          getRetainedBrowser(source.retrySession.reportId);
+        if (!session?.retryStep || !session.browser.isConnected())
+          return reply
+            .code(410)
+            .send({
+              error:
+                "原浏览器会话已关闭或未保留。请使用 --keep-browser 启动后重新执行；单步重试不会重新登录。",
+            });
+        const result = await session.retryStep(source, step.stepId);
+        await store.put("report", result.id, 1, result);
+        return result;
+      } finally {
+        busy = false;
+      }
+    },
+  );
   app.get("/api/recordings", async () => {
     const deleted = new Set(
       (await store.list<{ id: string }>("recording-deletion")).map((r) => r.id),

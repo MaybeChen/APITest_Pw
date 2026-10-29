@@ -185,7 +185,9 @@ it.each([
         await store.put("report", report.id, 1, report);
         const stored = await store.get<typeof report>("report", report.id);
         const history = (await app.inject("/api/reports")).json();
-        expect(history).toEqual([stored]);
+        const visible = structuredClone(stored!);
+        if (!getRetainedBrowser(report.id)) delete visible.retrySession;
+        expect(history).toEqual([visible]);
         if (enabled) {
           const diagnostic = (
             stored?.steps[0].request as {

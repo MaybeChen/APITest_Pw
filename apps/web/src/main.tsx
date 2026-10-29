@@ -1401,6 +1401,13 @@ function App() {
                   UI 登录：{report.auth.status} {report.auth.error} · 清理：
                   {report.cleanupStatus}
                 </p>
+                {report.retryOf && (
+                  <p className="message">
+                    单步重试：{report.retryOf.stepId}，来源报告{" "}
+                    {report.retryOf.reportId}
+                    。复用原浏览器会话和步骤数据，未重新登录、执行其他步骤或清理；单步通过不代表整套计划通过。
+                  </p>
+                )}
                 {report.debug?.browserRetained && (
                   <p className="message">
                     本次执行结束后保留了浏览器窗口，可检查当前会话；手动关闭窗口或停止后端即可结束调试。
@@ -1433,6 +1440,32 @@ function App() {
                             {r.status} · {r.stepId} · {r.endedAt - r.startedAt}{" "}
                             ms
                           </summary>
+                          {r.retryable && (
+                            <>
+                              <button
+                                disabled={busy || !report.retrySession}
+                                onClick={() =>
+                                  void task(async () => {
+                                    const result = await api<Report>(
+                                      `/reports/${encodeURIComponent(report.id)}/steps/${encodeURIComponent(r.stepId)}/retry`,
+                                      {},
+                                    );
+                                    setReport(result);
+                                    setNotice(
+                                      "单步重试完成，结果已单独保存；原报告保留。",
+                                    );
+                                  })
+                                }
+                              >
+                                重试此步骤
+                              </button>
+                              <p>
+                                {report.retrySession
+                                  ? "仅重发此查询，复用当前会话和原步骤输入，不重跑前置 UI、上游步骤或清理。已清理的资源不会重新创建。"
+                                  : "原会话不可用。使用 pnpm dev:headed --keep-browser 启动后重新执行，才能在同一会话中单步重试。"}
+                              </p>
+                            </>
+                          )}
                           <pre>{JSON.stringify(r, null, 2)}</pre>
                         </details>
                       ))}
