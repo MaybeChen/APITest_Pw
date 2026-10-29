@@ -91,7 +91,35 @@ export function Datasets({
       .then(async (r) => {
         if (!r.ok) throw new Error(await r.text());
         const data = (await r.json()) as Dataset[];
-        if (!cancelled) setDatasets(data);
+        if (!cancelled) {
+          setDatasets(data);
+          const current = data.filter(
+            (d) => d.planId === plan.planId && d.planVersion === plan.version,
+          );
+          const previousVersion = Math.max(
+            0,
+            ...data
+              .filter(
+                (d) => d.planId === plan.planId && d.planVersion < plan.version,
+              )
+              .map((d) => d.planVersion),
+          );
+          const choices = current.length
+            ? current
+            : data.filter(
+                (d) =>
+                  d.planId === plan.planId && d.planVersion === previousVersion,
+              );
+          setSelected((existing) =>
+            choices.some((d) => `${d.id}:${d.version}` === existing)
+              ? existing
+              : !candidate
+                ? choices[0]
+                  ? `${choices[0].id}:${choices[0].version}`
+                  : ""
+                : "",
+          );
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -99,10 +127,23 @@ export function Datasets({
     return () => {
       cancelled = true;
     };
-  }, [plan.planId, plan.version]);
-  const available = datasets.filter(
+  }, [plan.planId, plan.version, plan.status, candidate]);
+  const currentDatasets = datasets.filter(
     (d) => d.planId === plan.planId && d.planVersion === plan.version,
   );
+  const previousVersion = Math.max(
+    0,
+    ...datasets
+      .filter((d) => d.planId === plan.planId && d.planVersion < plan.version)
+      .map((d) => d.planVersion),
+  );
+  const previousDatasets = datasets.filter(
+    (d) => d.planId === plan.planId && d.planVersion === previousVersion,
+  );
+  const available = [...currentDatasets, ...previousDatasets];
+  const inherited =
+    available.find((d) => `${d.id}:${d.version}` === selected)?.planVersion !==
+      plan.version && !!selected;
   const extract = () => {
     const next = structuredClone(plan);
     next.parameters ??= {};
@@ -164,6 +205,11 @@ export function Datasets({
     setNotice("");
     try {
       let dataset = available.find((d) => `${d.id}:${d.version}` === selected);
+      if (dataset && dataset.planVersion !== plan.version) {
+        throw new Error(
+          "这是旧计划版本的数据集，请复制并修改数据，核对后保存到当前版本。",
+        );
+      }
       if (!dataset) {
         const draft: Omit<Dataset, "id"> = {
           version: 1,
@@ -284,10 +330,18 @@ export function Datasets({
           {available.map((d) => (
             <option key={`${d.id}:${d.version}`} value={`${d.id}:${d.version}`}>
               {d.name} · v{d.version} · {d.rows.length} 组
+              {d.planVersion !== plan.version
+                ? `（来自 Plan v${d.planVersion}）`
+                : ""}
             </option>
           ))}
         </select>
       </label>
+      {inherited && (
+        <p role="status">
+          原数据集仍在。新版本批准后将自动复制兼容的数据集；参数不兼容时，请“复制并修改数据”，补齐后重新审核保存。
+        </p>
+      )}
       {!selected ? (
         <>
           <label>
@@ -323,7 +377,20 @@ export function Datasets({
                 (d) => `${d.id}:${d.version}` === selected,
               )!;
               setBaseline(d);
-              setRows(JSON.stringify(d.rows, null, 2));
+              setRows(
+                JSON.stringify(
+                  d.rows.map((row) => ({
+                    ...row,
+                    values: Object.fromEntries(
+                      Object.entries(row.values).filter(([key]) =>
+                        Object.hasOwn(plan.parameters ?? {}, key),
+                      ),
+                    ),
+                  })),
+                  null,
+                  2,
+                ),
+              );
               setName(`${d.name} 副本`);
               setSelected("");
               setReviewConfirmed(false);
@@ -361,7 +428,7 @@ export function Datasets({
       {notice && <p role="status">{notice}</p>}
       <div className="toolbar">
         <button
-          disabled={busy || working || plan.status !== "APPROVED"}
+          disabled={busy || working || plan.status !== "APPROVED" || inherited}
           onClick={() => void act(false)}
         >
           保存数据集
@@ -371,6 +438,7 @@ export function Datasets({
             busy ||
             working ||
             plan.status !== "APPROVED" ||
+            inherited ||
             (plan.dataPolicy === "REVIEW_REQUIRED" &&
               Object.keys(plan.parameters ?? {}).length > 0 &&
               !(selected

@@ -109,11 +109,9 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
           activeGenerations.size ||
           generationActions.size
         )
-          return reply
-            .code(409)
-            .send({
-              error: "存在录制、生成或执行中的任务，请结束后再删除配置。",
-            });
+          return reply.code(409).send({
+            error: "存在录制、生成或执行中的任务，请结束后再删除配置。",
+          });
         if (!(await store.get(kind, id)))
           return reply.code(404).send({ error: "配置不存在或已删除。" });
         if (kind === "environment") {
@@ -121,11 +119,9 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
             (profile) => profile.environmentRef === id,
           );
           if (profiles.length)
-            return reply
-              .code(409)
-              .send({
-                error: `环境仍被 UI 认证协议引用：${profiles.map((profile) => profile.id).join("、")}。请先删除或修改这些协议。`,
-              });
+            return reply.code(409).send({
+              error: `环境仍被 UI 认证协议引用：${profiles.map((profile) => profile.id).join("、")}。请先删除或修改这些协议。`,
+            });
         }
         await store.remove(kind, id);
         return reply.code(204).send();
@@ -736,6 +732,54 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
       version: plan.version,
       data: plan,
     });
+    const datasets = await store.latest<Dataset>("dataset");
+    const previous = (await store.list<Plan>("plan"))
+      .filter(
+        (item) => item.planId === plan.planId && item.version < plan.version,
+      )
+      .sort((a, b) => b.version - a.version)
+      .find((item) =>
+        datasets.some(
+          (dataset) =>
+            dataset.planId === item.planId &&
+            dataset.planVersion === item.version,
+        ),
+      );
+    if (previous) {
+      for (const dataset of datasets.filter(
+        (item) =>
+          item.planId === plan.planId && item.planVersion === previous.version,
+      )) {
+        const copy: Dataset = {
+          ...structuredClone(dataset),
+          id: randomUUID(),
+          version: 1,
+          planVersion: plan.version,
+        };
+        if (
+          copy.review &&
+          (!isDeepStrictEqual(previous.parameters, plan.parameters) ||
+            !isDeepStrictEqual(
+              previous.dataRequirements,
+              plan.dataRequirements,
+            ) ||
+            !isDeepStrictEqual(previous.steps, plan.steps))
+        )
+          copy.review.confirmed = false;
+        try {
+          validateDataset(plan, copy);
+        } catch {
+          // Incompatible datasets remain available in the UI for copying and repair.
+          continue;
+        }
+        entries.push({
+          kind: "dataset",
+          entityId: copy.id,
+          version: 1,
+          data: copy,
+        });
+      }
+    }
     await store.putBatch(entries);
     return { testCase, plan, assets: b.assets };
   });

@@ -1521,7 +1521,8 @@ test("selects the execution UI profile in review and preserves approved versions
       request.url().endsWith("/api/drafts") && request.method() === "POST",
   );
   await page.getByRole("button", { name: "保存草稿", exact: true }).click();
-  expect((await draftRequest).postDataJSON().plan.authProfileRef).toBe(id);
+  const initialDraft = (await draftRequest).postDataJSON();
+  expect(initialDraft.plan.authProfileRef).toBe(id);
   await page.getByRole("button", { name: "我已审查预期、断言与资产" }).click();
   await page
     .getByRole("button", { name: "批准并保存版本", exact: true })
@@ -1529,8 +1530,32 @@ test("selects the execution UI profile in review and preserves approved versions
   await expect(
     page.getByText("该版本已批准并以不可覆盖记录保存。", { exact: true }),
   ).toBeVisible();
+  for (const name of ["继承数据 A", "继承数据 B"]) {
+    expect(
+      (
+        await request.post("/api/datasets", {
+          data: {
+            name,
+            version: 1,
+            planId: initialDraft.plan.planId,
+            planVersion: 1,
+            rows: [
+              { id: "r1", name: "第一组", values: {} },
+              { id: "r2", name: "第二组", values: {} },
+            ],
+          },
+        })
+      ).ok(),
+    ).toBe(true);
+  }
   await expect(selector).toBeEnabled();
   await selector.selectOption("demo-auth");
+  await expect(
+    page
+      .getByRole("combobox", { name: "选择数据集" })
+      .locator("option")
+      .filter({ hasText: "继承数据 A" }),
+  ).toHaveCount(1);
   await expect(selector).toHaveValue("demo-auth");
   const changedDraft = page.waitForRequest(
     (request) =>
@@ -1540,6 +1565,23 @@ test("selects the execution UI profile in review and preserves approved versions
   const saved = (await changedDraft).postDataJSON();
   expect(saved.plan.version).toBe(2);
   expect(saved.plan.authProfileRef).toBe("demo-auth");
+  await page.getByRole("button", { name: "我已审查预期、断言与资产" }).click();
+  await page
+    .getByRole("button", { name: "批准并保存版本", exact: true })
+    .click();
+  await expect(
+    page.getByText("该版本已批准并以不可覆盖记录保存。", { exact: true }),
+  ).toBeVisible();
+  const copiedData = (await (await request.get("/api/datasets")).json()).filter(
+    (item: { planId: string; planVersion: number }) =>
+      item.planId === saved.plan.planId && item.planVersion === 2,
+  );
+  expect(copiedData).toHaveLength(2);
+  expect(copiedData[0].rows).toHaveLength(2);
+  await expect(page.getByRole("combobox", { name: "选择数据集" })).toHaveValue(
+    new RegExp(copiedData.map((item: { id: string }) => item.id).join("|")),
+  );
+
   expect(saved.plan.status).toBe("DRAFT");
   expect(saved.testCase.version).toBe(2);
   expect(saved.plan.caseVersion).toBe(2);
