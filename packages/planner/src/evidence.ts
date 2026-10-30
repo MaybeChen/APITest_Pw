@@ -100,6 +100,17 @@ export function interfaceFacts(
     ),
     samples,
     omittedSamples: Math.max(0, variants.size - samples.length),
+    activity: {
+      firstAt: requests.length
+        ? Math.min(...requests.map((request) => request.startedAt))
+        : recording.startedAt,
+      lastAt: requests.length
+        ? Math.max(...requests.map((request) => request.startedAt))
+        : recording.startedAt,
+      recoveryCalls: requests.filter(
+        (request) => request.recordingPhase === "RECOVERY",
+      ).length,
+    },
   };
 }
 export function organizationEvidence(
@@ -154,6 +165,7 @@ export function interfaceSummary(item: CatalogInterface) {
     method: item.asset.method,
     path: item.asset.pathTemplate,
     operationType: item.asset.operationType,
+    activity: item.activity,
   };
 }
 // Downstream design uses every selected recorded call, not organization samples.
@@ -186,6 +198,12 @@ export function selectedCallEvidence(
         )
         .map(({ request }) => request.id),
     },
+    recordingContext: {
+      notes: recording.notes,
+      referenceMaterial: recording.referenceMaterial ?? "",
+      phaseMarkers: recording.phaseMarkers ?? [],
+      applicationCandidates: recording.applicationCandidates ?? [],
+    },
     interfaces: catalog.map((item) => ({
       ...interfaceSummary(item),
       asset: structuredClone(item.asset),
@@ -205,6 +223,8 @@ export function selectedCallEvidence(
       requestId: request.id,
       recordingIndex,
       startedAt: request.startedAt,
+      recordingPhase: request.recordingPhase,
+      pageId: request.pageId,
     })),
     dependencies: recording.dependencies
       .filter((d) => byRequest.has(d.from) && byRequest.has(d.to))

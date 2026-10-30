@@ -1,3 +1,4 @@
+import { requestPhase, initializationCandidates } from "./recording-context.js";
 import { AuthHintDiscovery } from "./auth-hints.js";
 import {
   recordingSchema,
@@ -10,6 +11,7 @@ import {
   type Browser,
   type BrowserContext,
   type Request,
+  type Page,
 } from "playwright";
 import { randomUUID } from "node:crypto";
 import type {
@@ -32,6 +34,11 @@ export class Recorder {
   private authScans = 0;
   private authDiscovery?: AuthHintDiscovery;
   private snapshotBytes = 0;
+  private pageIds = new WeakMap<Page, string>();
+  private pageId(page: Page) {
+    if (!this.pageIds.has(page)) this.pageIds.set(page, randomUUID());
+    return this.pageIds.get(page)!;
+  }
   recording: Recording;
   constructor(
     input: {
@@ -39,6 +46,7 @@ export class Recorder {
       scenario: string;
       target: string;
       notes?: string;
+      referenceMaterial?: string;
       workspaceId?: string;
       environmentRef?: string;
     },
@@ -53,6 +61,8 @@ export class Recorder {
       operations: [],
       requests: [],
       contextSnapshots: [],
+      pageNavigations: [],
+      phaseMarkers: [],
       contextCapture: {
         omittedSnapshots: 0,
         initializedFrames: 0,
@@ -75,6 +85,36 @@ export class Recorder {
     this.context = await this.browser.newContext({
       ignoreHTTPSErrors: this.env.ignoreHTTPSErrors ?? false,
     });
+    const resolved = new Set<string>();
+    this.context.on("page", (page) => {
+      const pageId = this.pageId(page);
+      const synchronize = () => {
+        const url = page.url();
+        if (this.stopping || !/^https?:/.test(url)) return;
+        const navigation = [...(this.recording.pageNavigations ?? [])]
+          .reverse()
+          .find(
+            (item) =>
+              !resolved.has(item.id) &&
+              (item.pageId === pageId ||
+                (!item.pageId &&
+                  new URL(item.url).origin === new URL(url).origin &&
+                  new URL(item.url).pathname === new URL(url).pathname)),
+          );
+        if (navigation) {
+          navigation.pageId = pageId;
+          navigation.url = redact(url);
+          navigation.newWindow = this.context!.pages().indexOf(page) > 0;
+          resolved.add(navigation.id);
+        }
+      };
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) synchronize();
+      });
+      page.on("domcontentloaded", synchronize);
+      // A popup's initial navigation may finish before the context page event.
+      synchronize();
+    });
     await this.context.route("**/*", async (route) => {
       try {
         allowedURL(route.request().url(), this.env);
@@ -83,7 +123,7 @@ export class Recorder {
         await route.abort("blockedbyclient");
       }
     });
-    await this.context.exposeBinding("__record", (_source, event: unknown) => {
+    await this.context.exposeBinding("__record", (source, event: unknown) => {
       if (this.stopping) return;
       if (
         event &&
@@ -118,7 +158,15 @@ export class Recorder {
       const parsed = recordingSchema.shape.operations.element.safeParse(event);
       if (!parsed.success) this.recording.contextCapture!.rejectedEvents!++;
       if (parsed.success && this.recording.operations.length < 10000)
-        this.recording.operations.push(redact(parsed.data));
+        this.recording.operations.push(
+          redact({
+            ...parsed.data,
+            context: {
+              ...parsed.data.context,
+              pageId: this.pageId(source.page),
+            },
+          }),
+        );
     });
     // Load browser JavaScript directly: serializing a tsx-transformed callback
     // can introduce references to Node-side helpers such as __name.
@@ -143,8 +191,38 @@ export class Recorder {
       this.pending.add(pending);
     });
     const ids = new Map<Request, string>();
+    const navigationIds = new Map<Request, string>();
     this.context.on("request", (req) => {
       if (this.stopping) return;
+      let pageId: string | undefined;
+      try {
+        pageId = this.pageId(req.frame().page());
+      } catch {
+        /* Popup document can precede its frame. */
+      }
+      if (
+        req.resourceType() === "document" &&
+        req.method() === "GET" &&
+        (this.recording.pageNavigations?.length ?? 0) < 500
+      ) {
+        let mainFrame = true;
+        try {
+          mainFrame = req.frame() === req.frame().page().mainFrame();
+        } catch {
+          /* Initial popup navigation. */
+        }
+        if (mainFrame) {
+          const id = randomUUID();
+          navigationIds.set(req, id);
+          this.recording.pageNavigations!.push({
+            id,
+            pageId,
+            url: redact(req.url()),
+            startedAt: Date.now(),
+            newWindow: this.context!.pages().length > 1,
+          });
+        }
+      }
       if (!shouldCaptureRequest(req.url(), req.resourceType(), this.env))
         return;
       if (this.recording.requests.length >= 5000) return;
@@ -175,6 +253,7 @@ export class Recorder {
       this.recording.requests.push(
         redact({
           id: rid,
+          pageId,
           url: u.toString(),
           method: req.method(),
           resourceType: req.resourceType(),
@@ -215,6 +294,18 @@ export class Recorder {
     });
     this.context.on("response", (res) => {
       const task = (async () => {
+        const navigation = this.recording.pageNavigations?.find(
+          (item) => item.id === navigationIds.get(res.request()),
+        );
+        if (navigation) {
+          navigation.status = res.status();
+          navigation.contentType = res.headers()["content-type"] ?? "";
+          try {
+            navigation.pageId = this.pageId(res.frame().page());
+          } catch {
+            /* No page frame available. */
+          }
+        }
         const row = this.recording.requests.find(
           (r) => r.id === ids.get(res.request()),
         );
@@ -419,13 +510,18 @@ export interface Filter {
   resourceTypes?: string[];
   categories?: string[];
   overrides?: Record<string, boolean>;
+  initializationNavigationIds?: string[];
 }
-export function analyze(recording: Recording, filter: Filter = {}) {
+export function analyze(
+  recording: Recording,
+  filter: Filter = {},
+): { recording: Recording; assets: Asset[] } {
   const r = structuredClone(recording);
   const assets: Asset[] = [];
   for (const req of r.requests) {
     const u = new URL(req.url);
     const path = u.pathname;
+    req.recordingPhase = requestPhase(r, req);
     const auth =
       /\/(?:login|logout|auth|sso|session|sessions|oauth2?|saml)(?:\/|$|\.(?:action|do|jsp)$)/i.test(
         path,
@@ -440,17 +536,21 @@ export function analyze(recording: Recording, filter: Filter = {}) {
         ? "TELEMETRY"
         : stat
           ? "STATIC_RESOURCE"
-          : path.startsWith("/api/")
-            ? "BUSINESS"
-            : "UNKNOWN";
+          : req.recordingPhase === "INITIALIZATION"
+            ? "PAGE_INITIALIZATION"
+            : path.startsWith("/api/")
+              ? "BUSINESS"
+              : "UNKNOWN";
     req.classification = {
       source: "RULE",
       confidence: req.category === "UNKNOWN" ? 0.3 : 0.85,
       reason: auth
         ? "UI authentication bootstrap; excluded from business plan"
-        : req.category === "UNKNOWN"
-          ? "非标准接口路径：保留为待审核候选，不因缺少 /api/ 前缀而排除"
-          : `Resource and path rule: ${req.category}`,
+        : req.category === "PAGE_INITIALIZATION"
+          ? "页面加载阶段请求：默认排除，可手动勾选业务查询或依赖接口"
+          : req.category === "UNKNOWN"
+            ? "非标准接口路径：保留为待审核候选，不因缺少 /api/ 前缀而排除"
+            : `Resource and path rule: ${req.category}`,
       confirmed: false,
     };
     const excluded =
@@ -518,6 +618,10 @@ export function analyze(recording: Recording, filter: Filter = {}) {
     };
     assets.push(asset);
   }
+  r.applicationCandidates = initializationCandidates(
+    r,
+    filter.initializationNavigationIds,
+  );
   r.dependencies = [];
   const leaves = (
     value: unknown,
@@ -540,8 +644,13 @@ export function analyze(recording: Recording, filter: Filter = {}) {
   };
   for (let index = 0; index < r.requests.length; index++) {
     const from = r.requests[index];
-    for (const source of leaves(from.response).filter((leaf) =>
-      /id$/i.test(leaf.key),
+    for (const source of leaves(from.response).filter(
+      (leaf) =>
+        /id$/i.test(leaf.key) ||
+        (from.recordingPhase === "INITIALIZATION" &&
+          /(?:name|key)$/i.test(leaf.key) &&
+          typeof leaf.value === "string" &&
+          leaf.value.trim().length >= 3),
     )) {
       for (const to of r.requests.slice(index + 1)) {
         if (from.endedAt !== undefined && from.endedAt > to.startedAt) continue;
@@ -584,5 +693,35 @@ export function analyze(recording: Recording, filter: Filter = {}) {
       }
     }
   }
+  // Retain initialization calls only when an exact ID dependency feeds a kept call.
+  let promoted = false,
+    changed = true;
+  const requestIndex = new Map(
+    r.requests.map((request) => [request.id, request]),
+  );
+  while (changed) {
+    changed = false;
+    for (const edge of r.dependencies) {
+      const from = requestIndex.get(edge.from);
+      const to = requestIndex.get(edge.to);
+      if (
+        to?.keep &&
+        from?.category === "PAGE_INITIALIZATION" &&
+        !from.keep &&
+        filter.overrides?.[from.id] !== false
+      ) {
+        from.keep = true;
+        changed = true;
+        promoted = true;
+      }
+    }
+  }
+  if (promoted)
+    return analyze(r, {
+      ...filter,
+      overrides: Object.fromEntries(
+        r.requests.map((request) => [request.id, !!request.keep]),
+      ),
+    });
   return { recording: r, assets };
 }

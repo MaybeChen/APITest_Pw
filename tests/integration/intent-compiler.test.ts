@@ -11,13 +11,14 @@ import { runDataset } from "../../packages/runner/src/index";
 import { intentFixture } from "../fixtures/intent";
 import type { Dataset } from "../../packages/contracts/src/index";
 
-it("runs compiled intent with a fresh resource and conditionally cleans it after business failure", async () => {
-  const demo = demoApp();
-  await demo.listen({ host: "127.0.0.1", port: 3100 });
-  const previous = process.env.DEMO_PASSWORD;
-  process.env.DEMO_PASSWORD = "demo-only";
-  try {
-    for (const mode of ["success", "status-failure", "non-array-negative"]) {
+it.each(["success", "status-failure", "non-array-negative"])(
+  "runs compiled intent with a fresh resource and conditionally cleans it after business failure (%s)",
+  async (mode) => {
+    const demo = demoApp();
+    await demo.listen({ host: "127.0.0.1", port: 3100 });
+    const previous = process.env.DEMO_PASSWORD;
+    process.env.DEMO_PASSWORD = "demo-only";
+    try {
       const fail = mode !== "success";
       const f = intentFixture();
       if (mode === "status-failure")
@@ -86,10 +87,11 @@ it("runs compiled intent with a fresh resource and conditionally cleans it after
       expect(
         report.steps.find((step) => step.stepId === "cleanup_delete")?.attempts,
       ).toBe(fail ? 1 : 0);
+    } finally {
+      if (previous === undefined) delete process.env.DEMO_PASSWORD;
+      else process.env.DEMO_PASSWORD = previous;
+      await demo.close();
     }
-  } finally {
-    if (previous === undefined) delete process.env.DEMO_PASSWORD;
-    else process.env.DEMO_PASSWORD = previous;
-    await demo.close();
-  }
-}, 30000);
+  },
+  30000,
+);

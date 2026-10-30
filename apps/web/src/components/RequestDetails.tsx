@@ -3,6 +3,7 @@ type RequestEvidence = Recording["requests"][number];
 export function requestCategoryLabel(category: RequestEvidence["category"]) {
   return {
     UNKNOWN: "待确认接口",
+    PAGE_INITIALIZATION: "页面初始化（默认排除）",
     BUSINESS: "业务接口候选",
     AUTH_BOOTSTRAP: "登录 / 认证",
     TELEMETRY: "遥测 / 噪声候选",

@@ -20,7 +20,7 @@ const server = createServer((req, res) => {
     body = `<script>const xhr = new XMLHttpRequest();xhr.open('GET','/api/popup-frame');xhr.send();</script>`;
   else
     body =
-      '<main><h1>Main context</h1><textarea>private-default-value</textarea><button onclick="fetch(\'/api/main\')">Main request</button><a href="/popup" target="_blank">Open popup</a><iframe src="/frame"></iframe></main>';
+      '<main><h1>Main context</h1><textarea>private-default-value</textarea><button onclick="fetch(\'/api/main\')">Main request</button><a href="/popup#/studio" target="_blank">Open popup</a><iframe src="/frame"></iframe></main>';
   res.writeHead(200, {
     "content-type": path.startsWith("/api/") ? "application/json" : "text/html",
     "content-length": Buffer.byteLength(body),

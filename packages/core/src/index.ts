@@ -322,6 +322,15 @@ export function validate(
   } catch (e) {
     return [String(e)];
   }
+  for (const initialization of p.applicationInitializations ?? []) {
+    try {
+      allowedURL(initialization.url, env);
+    } catch {
+      errors.push(`应用初始化地址不属于允许环境：${initialization.url}`);
+    }
+    if (!p.steps.some((step) => step.id === initialization.beforeStepId))
+      errors.push(`应用初始化引用不存在的步骤：${initialization.beforeStepId}`);
+  }
   if (
     c.caseId !== p.caseId ||
     c.version !== p.caseVersion ||

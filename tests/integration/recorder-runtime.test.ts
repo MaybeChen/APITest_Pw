@@ -25,6 +25,16 @@ it("records DOM context under the actual tsx runtime across reloads, frames and 
     errors: string[];
   };
   expect(result.errors).toEqual([]);
+  const popupNavigation = result.recording.pageNavigations?.find((item) =>
+    item.url.endsWith("/popup#/studio"),
+  );
+  expect(popupNavigation).toMatchObject({ status: 200, newWindow: true });
+  expect(
+    result.recording.requests.find(
+      (item) => new URL(item.url).pathname === "/api/popup",
+    )?.pageId,
+  ).toBe(popupNavigation?.pageId);
+
   expect(
     result.recording.contextCapture?.initializedFrames,
   ).toBeGreaterThanOrEqual(4);

@@ -1728,3 +1728,126 @@ test("retries one report step and displays a separate result without replacing t
     page.getByRole("heading", { name: "运行结果 FAILED" }),
   ).toBeVisible();
 });
+
+test("records reference material and stage markers and reviews HTML initialization before generation", async ({
+  page,
+}) => {
+  const baseURL = "http://127.0.0.1:3100";
+  const hint = "接口资料：参数名称唯一；最后删除本次创建的数据。";
+  let started: any, generated: any;
+  const phases: string[] = [];
+  const recording: any = {
+    id: "phased-ui",
+    caseName: "恢复场景",
+    scenario: "创建并清理",
+    target: baseURL,
+    environmentRef: "demo",
+    notes: "",
+    state: "RECORDING",
+    startedAt: 1,
+    operations: [],
+    dependencies: [],
+    phaseMarkers: [],
+    requests: [
+      {
+        id: "business",
+        url: baseURL + "/api/save",
+        method: "POST",
+        resourceType: "fetch",
+        startedAt: 2,
+        status: 200,
+        headers: {},
+        query: {},
+        response: { ok: true },
+        operationCandidates: [],
+        keep: true,
+        category: "BUSINESS",
+      },
+    ],
+    applicationCandidates: [
+      {
+        navigationId: "document",
+        url: baseURL + "/app#/entry",
+        newWindow: true,
+        requestIds: ["business"],
+        enabled: true,
+      },
+    ],
+  };
+  await page.route("**/api/environments", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "demo",
+          baseURL,
+          allowedOrigins: [baseURL],
+          allowWrites: true,
+          allowHighRisk: true,
+        },
+      ],
+    }),
+  );
+  await page.route("**/api/recordings", async (route) => {
+    if (route.request().method() === "POST") {
+      started = route.request().postDataJSON();
+      Object.assign(recording, started);
+      await route.fulfill({ json: recording });
+    } else await route.fulfill({ json: started ? [recording] : [] });
+  });
+  await page.route("**/api/recordings/phased-ui/phase", async (route) => {
+    const { phase } = route.request().postDataJSON();
+    phases.push(phase);
+    recording.phaseMarkers.push({ phase, at: Date.now() });
+    await route.fulfill({ json: recording });
+  });
+  await page.route("**/api/recordings/phased-ui/stop", async (route) => {
+    recording.state = "STOPPED";
+    await route.fulfill({ json: recording });
+  });
+  await page.route("**/api/recordings/phased-ui/analyze", async (route) => {
+    const filter = route.request().postDataJSON();
+    if (filter.initializationNavigationIds)
+      recording.applicationCandidates[0].enabled =
+        filter.initializationNavigationIds.includes("document");
+    await route.fulfill({ json: { recording, assets: [] } });
+  });
+  await page.route("**/api/generations", async (route) => {
+    if (route.request().method() === "POST") {
+      generated = route.request().postDataJSON();
+      await route.fulfill({
+        status: 400,
+        json: { error: "测试已捕获生成输入" },
+      });
+    } else await route.fulfill({ json: [] });
+  });
+  await page.goto("/");
+  await page.getByLabel("用例名称", { exact: true }).fill("恢复场景");
+  await page.getByLabel("测试场景", { exact: true }).fill("创建并清理");
+  await page
+    .getByRole("combobox", { name: "执行环境", exact: true })
+    .selectOption("demo");
+  await page.getByLabel("目标站点", { exact: true }).fill(baseURL);
+  await page
+    .getByLabel("补充资料与生成提示（可选）", { exact: true })
+    .fill(hint);
+  await page.getByRole("button", { name: "开始录制", exact: true }).click();
+  await page.getByRole("button", { name: "开始业务操作", exact: true }).click();
+  await page
+    .getByRole("button", { name: "开始恢复/清理", exact: true })
+    .click();
+  await page.getByRole("button", { name: "停止并保存", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "应用初始化候选", exact: true }),
+  ).toBeVisible();
+  const candidate = page.getByRole("checkbox", { name: /新窗口/ });
+  await expect(candidate).toBeChecked();
+  await candidate.uncheck();
+  await page
+    .getByRole("button", { name: "启动生成工作流", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("测试已捕获生成输入");
+  expect(phases).toEqual(["BUSINESS", "RECOVERY"]);
+  expect(started.referenceMaterial).toBe(hint);
+  expect(generated.recording.referenceMaterial).toBe(hint);
+  expect(generated.recording.applicationCandidates[0].enabled).toBe(false);
+});

@@ -10,6 +10,8 @@ const recording = recordingSchema.parse({
   workspaceId: "pipeline-workspace",
   caseName: "查询订单",
   scenario: "查看订单列表",
+  referenceMaterial:
+    "接口资料：列表为空时应返回空数组，恢复操作不得删除外部数据。",
   target: demoEnv.baseURL,
   state: "STOPPED",
   startedAt: 1,
@@ -34,9 +36,11 @@ it("persists both confirmation gates, rejects stale edits, and reuses interface 
   const store = new Store("file::memory:");
   const provider = new MockAIProvider();
   const calls: string[] = [];
+  const captured: Record<string, any> = {};
   const original = provider.runTask.bind(provider);
   provider.runTask = async (...args) => {
     calls.push(args[0]);
+    captured[args[0]] = args[1];
     return original(...args);
   };
   const app = await createApp(store, provider);
@@ -178,6 +182,15 @@ it("persists both confirmation gates, rejects stale edits, and reuses interface 
     expect(job.datasetCandidate?.planId).toBe(job.plan!.planId);
     expect(calls.filter((c) => c === "PLAN_DESIGN")).toHaveLength(1);
     expect(job.validation?.blockingErrors).toEqual([]);
+    expect(captured.API_ORGANIZATION.referenceMaterial).toBe(
+      recording.referenceMaterial,
+    );
+    expect(captured.CASE_DESIGN.recordingContext.referenceMaterial).toBe(
+      recording.referenceMaterial,
+    );
+    expect(captured.PLAN_DESIGN.recordingContext.referenceMaterial).toBe(
+      recording.referenceMaterial,
+    );
     const confirmedCase = structuredClone(job.testCase);
     expect(
       (

@@ -285,7 +285,11 @@ export function compileCallIntent(
       semanticStepRef: call.semanticStepRef,
       apiId: call.apiId,
       apiVersion: asset.version,
-      phase: "API",
+      phase: ["CLEANUP", "RESTORE"].includes(
+        semantic.get(call.semanticStepRef)?.purpose ?? "BUSINESS",
+      )
+        ? "CLEANUP"
+        : "API",
       dependsOn: [...call.dependsOn],
       path,
       query: Object.fromEntries(
@@ -322,9 +326,18 @@ export function compileCallIntent(
           : [`${context.environment.id}:${asset.pathTemplate}`],
       timeoutMs: 10000,
       retries: 0,
-      failurePolicy: "STOP",
+      failurePolicy: ["CLEANUP", "RESTORE"].includes(
+        semantic.get(call.semanticStepRef)?.purpose ?? "BUSINESS",
+      )
+        ? "CONTINUE"
+        : "STOP",
       ownsResource: false,
-      requiresOwnership: asset.operationType === "DELETE",
+      requiresOwnership:
+        asset.operationType === "DELETE" ||
+        (["CLEANUP", "RESTORE"].includes(
+          semantic.get(call.semanticStepRef)?.purpose ?? "BUSINESS",
+        ) &&
+          asset.risk !== "READ"),
     });
   }
   const nodes = new Map(steps.map((step) => [step.id, step]));
@@ -549,7 +562,8 @@ export function compileCallIntent(
         if (!step.dependsOn.includes(producer.id))
           step.dependsOn.push(producer.id);
         if (
-          assets.get(call.apiId)!.operationType === "DELETE" &&
+          (assets.get(call.apiId)!.operationType === "DELETE" ||
+            step.phase === "CLEANUP") &&
           input.location === "PATH"
         ) {
           const producerAsset = assets.get(producer.apiId)!;
@@ -565,7 +579,10 @@ export function compileCallIntent(
             producer.ownsResource = true;
             producer.resourceVariable = variable;
             step.resourceVariable = variable;
-          } else fail(`调用 ${call.id} 的删除目标没有本次创建并提取的资源证据`);
+          } else
+            fail(
+              `调用 ${call.id} 的${assets.get(call.apiId)!.operationType === "DELETE" ? "删除" : "恢复"}目标没有本次创建并提取的资源证据`,
+            );
         }
       }
       if (input.location === "BODY") {
@@ -580,13 +597,23 @@ export function compileCallIntent(
     if (!intent.calls.some((call) => call.semanticStepRef === id))
       fail(`语义步骤 ${id} 没有接口调用`);
   ordered(steps);
+  for (const step of steps.filter((step) => step.phase === "CLEANUP")) {
+    step.parallelSafe = false;
+    if (assets.get(step.apiId)!.risk !== "READ") {
+      if (!step.resourceVariable)
+        fail(
+          `恢复/清理步骤 ${step.id} 缺少本次运行的资源所有权依据，不能直接修改已有数据`,
+        );
+      else step.onlyIfOwned = true;
+    }
+  }
   for (const step of [...steps])
     if (assets.get(step.apiId)!.operationType === "DELETE") {
       if (!step.resourceVariable)
         fail(
           `调用 ${step.id} 缺少已验证的资源所有权，不能删除录制中的历史资源`,
         );
-      else {
+      else if (step.phase !== "CLEANUP") {
         let cleanupId = `cleanup_${step.id}`;
         while (steps.some((node) => node.id === cleanupId)) cleanupId += "_";
         steps.push({
@@ -613,6 +640,25 @@ export function compileCallIntent(
       policyRef: "recording-compiler-v2",
       authProfileRef: context.authProfileRef,
       uiActions: [],
+      applicationInitializations: (
+        context.recording.applicationCandidates ?? []
+      )
+        .filter((item) => item.enabled)
+        .flatMap((candidate) => {
+          const first = ordered(steps).find((step) =>
+            candidate.requestIds.includes(requests.get(step.id)?.id ?? ""),
+          );
+          return first
+            ? [
+                {
+                  navigationId: candidate.navigationId,
+                  url: candidate.url,
+                  newWindow: candidate.newWindow,
+                  beforeStepId: first.id,
+                },
+              ]
+            : [];
+        }),
       steps,
       parameters: {},
       compilation: {

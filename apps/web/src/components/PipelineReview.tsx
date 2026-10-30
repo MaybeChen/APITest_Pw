@@ -117,7 +117,7 @@ export function PipelineReview({
                   <p>{item.description}</p>
                   <small>
                     {recommendation
-                      ? `${recommendation.role === "DEPENDENCY" ? "依赖接口" : "场景接口"}：${recommendation.reason}`
+                      ? `${recommendation.role === "DEPENDENCY" ? "依赖接口" : recommendation.role === "CLEANUP" ? "清理/恢复接口" : "场景接口"}：${recommendation.reason}`
                       : "模型未推荐，可手动选择"}
                   </small>
                   {!!item.uncertainties.length && (
@@ -286,6 +286,23 @@ export function PipelineReview({
                     value={step.expected}
                     onChange={(e) => update({ expected: e.target.value })}
                   />
+                </label>
+                <label>
+                  步骤用途
+                  <select
+                    value={step.purpose ?? "BUSINESS"}
+                    onChange={(event) =>
+                      update({
+                        purpose: event.target.value as typeof step.purpose,
+                      })
+                    }
+                  >
+                    <option value="BUSINESS">业务验证</option>
+                    <option value="CLEANUP">数据清理（失败后仍尝试）</option>
+                    <option value="RESTORE">
+                      数据恢复（需原值与归属依据）
+                    </option>
+                  </select>
                 </label>
                 <small>
                   依赖：{step.dependsOn.join(" → ") || "无"}

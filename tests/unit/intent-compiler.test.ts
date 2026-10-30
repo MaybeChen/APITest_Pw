@@ -345,3 +345,54 @@ it("keeps exact flow evidence mandatory for authentication headers and deletion 
   ).toHaveLength(2);
   expect(result.plan.steps.some((s) => s.phase === "CLEANUP")).toBe(false);
 });
+
+it("compiles confirmed tail cleanup without duplicating it and schedules selected application initialization", () => {
+  const f = intentFixture();
+  for (const step of f.testCase.steps.filter((step) =>
+    ["remove", "verify"].includes(step.id),
+  ))
+    step.purpose = "CLEANUP";
+  f.context.recording.applicationCandidates = [
+    {
+      navigationId: "app",
+      url: f.context.environment.baseURL + "/app#/entry",
+      newWindow: true,
+      enabled: true,
+      requestIds: ["created", "inspected"],
+    },
+  ];
+  const { plan, issues } = compileCallIntent(f.intent, f.context);
+  expect(issues).toEqual([]);
+  expect(plan.steps.find((step) => step.id === "delete")).toMatchObject({
+    phase: "CLEANUP",
+    requiresOwnership: true,
+    onlyIfOwned: true,
+  });
+  expect(plan.steps.some((step) => step.id === "cleanup_delete")).toBe(false);
+  expect(plan.applicationInitializations).toEqual([
+    {
+      navigationId: "app",
+      url: f.context.environment.baseURL + "/app#/entry",
+      newWindow: true,
+      beforeStepId: "create",
+    },
+  ]);
+  expect(validate(f.testCase, plan, f.assets, f.context.environment)).toEqual(
+    [],
+  );
+  f.context.recording.applicationCandidates[0].enabled = false;
+  expect(
+    compileCallIntent(f.intent, f.context).plan.applicationInitializations,
+  ).toEqual([]);
+});
+it("blocks restoring or cleaning resources without verified run ownership", () => {
+  const f = intentFixture();
+  f.testCase.steps.find((step) => step.id === "remove")!.purpose = "RESTORE";
+  f.intent.calls[2].inputs = [];
+  const result = compileCallIntent(f.intent, f.context);
+  expect(
+    result.issues.some(
+      (issue) => issue.kind === "BLOCKING" && issue.message.includes("所有权"),
+    ),
+  ).toBe(true);
+});

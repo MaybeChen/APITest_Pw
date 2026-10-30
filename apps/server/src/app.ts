@@ -300,22 +300,18 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
           (item) => item.stepId === req.params.stepId,
         );
         if (!step?.retryable)
-          return reply
-            .code(409)
-            .send({
-              error:
-                "仅支持重试已执行的 GET/HEAD 查询步骤，不自动重放写操作或跳过的步骤。",
-            });
+          return reply.code(409).send({
+            error:
+              "仅支持重试已执行的 GET/HEAD 查询步骤，不自动重放写操作或跳过的步骤。",
+          });
         const session =
           source.retrySession &&
           getRetainedBrowser(source.retrySession.reportId);
         if (!session?.retryStep || !session.browser.isConnected())
-          return reply
-            .code(410)
-            .send({
-              error:
-                "原浏览器会话已关闭或未保留。请使用 --keep-browser 启动后重新执行；单步重试不会重新登录。",
-            });
+          return reply.code(410).send({
+            error:
+              "原浏览器会话已关闭或未保留。请使用 --keep-browser 启动后重新执行；单步重试不会重新登录。",
+          });
         const result = await session.retryStep(source, step.stepId);
         await store.put("report", result.id, 1, result);
         return result;
@@ -343,6 +339,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
         scenario: z.string().min(1),
         target: z.string().url(),
         notes: z.string().optional(),
+        referenceMaterial: z.string().max(24000).optional(),
         workspaceId: z.string().optional(),
         environmentRef: z.string().default("demo"),
       })
@@ -363,6 +360,19 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
       sessions.get(req.params.id)?.recording ??
       (await store.get("recording", req.params.id)) ??
       null,
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/recordings/:id/phase",
+    async (req, reply) => {
+      const recorder = sessions.get(req.params.id);
+      if (!recorder || recorder.recording.state !== "RECORDING")
+        return reply.code(409).send({ error: "请在录制进行中标记阶段。" });
+      const { phase } = z
+        .object({ phase: z.enum(["BUSINESS", "RECOVERY"]) })
+        .parse(req.body);
+      (recorder.recording.phaseMarkers ??= []).push({ phase, at: Date.now() });
+      return recorder.recording;
+    },
   );
   app.post<{ Params: { id: string } }>(
     "/api/recordings/:id/stop",
@@ -393,6 +403,7 @@ export async function createApp(store = new Store(), provider?: AIProvider) {
           resourceTypes: z.array(z.string()).optional(),
           categories: z.array(z.string()).optional(),
           overrides: z.record(z.string(), z.boolean()).optional(),
+          initializationNavigationIds: z.array(z.string()).optional(),
         })
         .parse(req.body ?? {});
       const result = analyze(recordingSchema.parse(raw), filter);

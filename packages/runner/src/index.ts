@@ -42,6 +42,8 @@ export async function uiAuthenticate(
   profile: AuthProfile,
   env: Environment,
   previousAuth?: Record<string, string>,
+  allowPreviousStorage = false,
+  deferMissingSources = false,
 ) {
   if (profile.environmentRef && profile.environmentRef !== env.id)
     throw new Error("UI flow environment mismatch");
@@ -154,6 +156,8 @@ export async function uiAuthenticate(
       let value: string | null | undefined;
       if (kind === "response" || kind === "responseHeader") {
         const previous = previousAuth?.[name];
+        if (deferMissingSources && !previous && !responses.observed(name))
+          continue;
         const prefix = source.prefix ?? "";
         value = await responses.read(
           name,
@@ -189,7 +193,14 @@ export async function uiAuthenticate(
               }
             })
           : page.mainFrame();
-        if (!frame) throw new Error(`Missing auth storage origin for ${name}`);
+        if (!frame) {
+          if (allowPreviousStorage && previousAuth?.[name]) {
+            auth[name] = previousAuth[name];
+            continue;
+          }
+          if (deferMissingSources) continue;
+          throw new Error(`Missing auth storage origin for ${name}`);
+        }
         value = await frame.evaluate(
           ({ key, kind }) =>
             (kind === "sessionStorage" ? sessionStorage : localStorage).getItem(
@@ -198,6 +209,18 @@ export async function uiAuthenticate(
           { key: source.storageKey, kind },
         );
       }
+      if (
+        !value &&
+        allowPreviousStorage &&
+        (kind === "localStorage" || kind === "sessionStorage") &&
+        previousAuth?.[name]
+      ) {
+        const prefix = source.prefix ?? "";
+        value = previousAuth[name].startsWith(prefix)
+          ? previousAuth[name].slice(prefix.length)
+          : previousAuth[name];
+      }
+      if (!value && deferMissingSources) continue;
       if (!value) throw new Error(`Missing ${kind} auth source ${name}`);
       auth[name] = (source.prefix ?? "") + value;
     }
@@ -324,7 +347,16 @@ export async function run(
       }
     });
     const page = await context.newPage();
-    let auth = await uiAuthenticate(context, page, authProfile, env);
+    let activePage = page;
+    let auth = await uiAuthenticate(
+      context,
+      page,
+      authProfile,
+      env,
+      undefined,
+      false,
+      !!p.applicationInitializations?.length,
+    );
     report.auth.status = "READY";
     // Approved preconditions use the same declarative interpreter.
     if (p.uiActions.length)
@@ -334,8 +366,11 @@ export async function run(
         { ...authProfile, actions: p.uiActions },
         env,
         auth,
+        false,
+        !!p.applicationInitializations?.length,
       );
     let stopped = false;
+    const initialized = new Set<string>();
     const snapshots = new Map<string, Record<string, unknown>>();
     const execute = async (
       step: Plan["steps"][number],
@@ -394,6 +429,59 @@ export async function run(
       if (!manualRetry && result.retryable)
         snapshots.set(step.id, structuredClone(vars));
       try {
+        if (!manualRetry)
+          for (const initialization of p.applicationInitializations ?? []) {
+            if (
+              initialization.beforeStepId !== step.id ||
+              initialized.has(initialization.navigationId)
+            )
+              continue;
+            const entry: NonNullable<
+              Report["applicationInitializations"]
+            >[number] = {
+              navigationId: initialization.navigationId,
+              url: initialization.url,
+              beforeStepId: step.id,
+              status: "FAILED",
+              startedAt: Date.now(),
+              endedAt: 0,
+            };
+            (report.applicationInitializations ??= []).push(entry);
+            try {
+              const applicationPage = initialization.newWindow
+                ? await context!.newPage()
+                : page;
+              auth = await uiAuthenticate(
+                context!,
+                applicationPage,
+                {
+                  ...authProfile,
+                  actions: [{ type: "navigate", target: initialization.url }],
+                  readySelector: initialization.readySelector,
+                },
+                env,
+                auth,
+                true,
+              );
+              if (
+                /\/(?:login|dspcas)(?:\/|$)/i.test(
+                  new URL(applicationPage.url()).pathname,
+                )
+              )
+                throw new Error("应用初始化停留在登录页面");
+              initialized.add(initialization.navigationId);
+              activePage = applicationPage;
+              entry.status = "PASSED";
+            } catch (error) {
+              result.retryable = false;
+              snapshots.delete(step.id);
+              entry.error = String(redact(String(error)));
+              report.auth = { status: "FAILED", error: entry.error };
+              throw error;
+            } finally {
+              entry.endedAt = Date.now();
+            }
+          }
         const a = assets.find(
           (a) => a.apiId === step.apiId && a.version === (step.apiVersion ?? 1),
         )!;
@@ -528,7 +616,7 @@ export async function run(
             const sessionEntries = await context!
               .cookies(url.href)
               .catch(() => []);
-            const pageURL = new URL(page.url());
+            const pageURL = new URL(activePage.url());
             const message = loginRedirect
               ? `接口返回 HTTP ${response.status()} 并跳转登录页 ${loginRedirect.origin}${loginRedirect.pathname}；当前请求未通过登录态或网关校验，请核对前置 UI 是否完成目标应用登录，以及当前会话与请求 Header 是否匹配`
               : "接口返回 HTTP 401，当前会话未通过认证；请检查前置 UI 登录结果";

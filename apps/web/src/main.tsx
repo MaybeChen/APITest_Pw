@@ -682,6 +682,14 @@ function App() {
                     录制说明
                     <input name="notes" />
                   </label>
+                  <label>
+                    补充资料与生成提示（可选）
+                    <textarea
+                      name="referenceMaterial"
+                      maxLength={24000}
+                      placeholder="可填写接口用途、参数约束、错误码、预期结果、应用入口及清理/恢复说明；不要填写密码或 Token。最多 24000 字符。"
+                    />
+                  </label>
                   <button disabled={busy}>开始录制</button>
                 </form>
               </section>
@@ -707,26 +715,54 @@ function App() {
                       刷新事件
                     </button>
                     {recording.state === "RECORDING" ? (
-                      <button
-                        onClick={() =>
-                          void task(async () => {
-                            const stopped = await api<Recording>(
-                              `/recordings/${recording.id}/stop`,
-                              {},
-                            );
-                            setRecording(stopped);
-                            setAnalysis(
-                              await api<Analysis>(
-                                `/recordings/${stopped.id}/analyze`,
+                      <>
+                        {(["BUSINESS", "RECOVERY"] as const).map((phase) => (
+                          <button
+                            key={phase}
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() =>
+                              void task(async () => {
+                                setRecording(
+                                  await api<Recording>(
+                                    `/recordings/${recording.id}/phase`,
+                                    { phase },
+                                  ),
+                                );
+                                setNotice(
+                                  phase === "BUSINESS"
+                                    ? "已标记业务操作开始；之前的初始化接口默认排除。"
+                                    : "已标记恢复阶段；相关尾部请求会参与清理/恢复识别。",
+                                );
+                              })
+                            }
+                          >
+                            {phase === "BUSINESS"
+                              ? "开始业务操作"
+                              : "开始恢复/清理"}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() =>
+                            void task(async () => {
+                              const stopped = await api<Recording>(
+                                `/recordings/${recording.id}/stop`,
                                 {},
-                              ),
-                            );
-                            setTab("分析与筛选");
-                          })
-                        }
-                      >
-                        停止并保存
-                      </button>
+                              );
+                              setRecording(stopped);
+                              setAnalysis(
+                                await api<Analysis>(
+                                  `/recordings/${stopped.id}/analyze`,
+                                  {},
+                                ),
+                              );
+                              setTab("分析与筛选");
+                            })
+                          }
+                        >
+                          停止并保存
+                        </button>
+                      </>
                     ) : (
                       <button
                         onClick={() =>
@@ -820,6 +856,10 @@ function App() {
                             resourceTypes: String(d.get("resourceTypes") ?? "")
                               .split(",")
                               .filter(Boolean),
+                            initializationNavigationIds:
+                              analysis.recording.applicationCandidates
+                                ?.filter((item) => item.enabled)
+                                .map((item) => item.navigationId),
                           },
                         ),
                       ),
@@ -846,6 +886,38 @@ function App() {
                       : "没有录到 Fetch/XHR，请检查请求域名白名单，并在录制期间完成业务操作后重新录制。"}
                   </div>
                 )}
+                {!!analysis.recording.applicationCandidates?.length && (
+                  <section>
+                    <h3>应用初始化候选</h3>
+                    <p>
+                      为保留接口匹配同一窗口中最近的 HTML
+                      主页面导航。勾选项将成为独立页面初始化步骤，不占用接口整理额度；请核对是否需要打开业务应用。
+                    </p>
+                    {analysis.recording.applicationCandidates.map(
+                      (candidate) => (
+                        <label
+                          key={candidate.navigationId}
+                          className="check-row"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={candidate.enabled}
+                            onChange={(event) => {
+                              const next = structuredClone(analysis);
+                              next.recording.applicationCandidates!.find(
+                                (item) =>
+                                  item.navigationId === candidate.navigationId,
+                              )!.enabled = event.target.checked;
+                              setAnalysis(next);
+                            }}
+                          />
+                          {candidate.newWindow ? "新窗口" : "当前页面"} ·{" "}
+                          {candidate.url}
+                        </label>
+                      ),
+                    )}
+                  </section>
+                )}
                 {analysis.recording.requests.map((r) => (
                   <details key={r.id}>
                     <summary>
@@ -863,6 +935,9 @@ function App() {
                         }}
                       />
                       {r.method} {new URL(r.url).pathname}{" "}
+                      {r.recordingPhase === "RECOVERY" && (
+                        <span className="badge">恢复阶段</span>
+                      )}
                       <span className="badge" title={r.category}>
                         {requestCategoryLabel(r.category)}
                       </span>
@@ -918,6 +993,10 @@ function App() {
                       const selected = await api<Analysis>(
                         `/recordings/${analysis.recording.id}/analyze`,
                         {
+                          initializationNavigationIds:
+                            analysis.recording.applicationCandidates
+                              ?.filter((item) => item.enabled)
+                              .map((item) => item.navigationId),
                           overrides: Object.fromEntries(
                             analysis.recording.requests.map((r) => [
                               r.id,
@@ -1129,6 +1208,21 @@ function App() {
                       {bundle.plan.authProfileRef} · Cleanup{" "}
                       {bundle.plan.cleanupPolicy}
                     </p>
+                    {!!bundle.plan.applicationInitializations?.length && (
+                      <details open>
+                        <summary>
+                          应用初始化 ·{" "}
+                          {bundle.plan.applicationInitializations.length} 个
+                        </summary>
+                        {bundle.plan.applicationInitializations.map((item) => (
+                          <p key={item.navigationId}>
+                            在 {item.beforeStepId} 前
+                            {item.newWindow ? "新开页面" : "加载页面"}：
+                            {item.url}
+                          </p>
+                        ))}
+                      </details>
+                    )}
                     {bundle.plan.steps
                       .filter(
                         (s) => !selection || s.semanticStepRef === selection,
@@ -1407,6 +1501,17 @@ function App() {
                     {report.retryOf.reportId}
                     。复用原浏览器会话和步骤数据，未重新登录、执行其他步骤或清理；单步通过不代表整套计划通过。
                   </p>
+                )}
+                {!!report.applicationInitializations?.length && (
+                  <details open>
+                    <summary>应用初始化结果</summary>
+                    {report.applicationInitializations.map((item) => (
+                      <p key={item.navigationId}>
+                        {item.status} · {item.url} ·{" "}
+                        {item.endedAt - item.startedAt} ms {item.error}
+                      </p>
+                    ))}
+                  </details>
                 )}
                 {report.debug?.browserRetained && (
                   <p className="message">

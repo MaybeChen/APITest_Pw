@@ -397,6 +397,8 @@ export async function executePipeline(
       const payload = (interfaces: typeof facts) => ({
         interfaces,
         factsOnly: true,
+        referenceMaterial: job.input.recording.referenceMaterial ?? "",
+        notes: job.input.recording.notes,
       });
       const groups = batchItems(facts, "API_ORGANIZATION", payload, limits);
       job.organizationBatches ??= groups.map((items, i) => ({
@@ -459,6 +461,9 @@ export async function executePipeline(
       const summaries = job.catalog!.map(interfaceSummary);
       const payload = (interfaces: typeof summaries) => ({
         scenario: job.scenario,
+        ...(job.input.recording.notes
+          ? { notes: job.input.recording.notes }
+          : {}),
         interfaces,
       });
       const groups = batchItems(summaries, "API_SELECTION", payload, {

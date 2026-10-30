@@ -96,6 +96,9 @@ export function observeAuthResponses(
     context.on("response", listener);
   }
   return {
+    observed(name: string) {
+      return seen.has(name);
+    },
     read(name: string, fallback?: string): Promise<string> {
       const value = values.get(name);
       if (value && value.sequence >= (requested.get(name) ?? 0))

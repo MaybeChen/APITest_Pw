@@ -51,6 +51,8 @@ export const action = z.object({
 });
 export const network = z.object({
   id,
+  pageId: id.optional(),
+  recordingPhase: z.enum(["INITIALIZATION", "BUSINESS", "RECOVERY"]).optional(),
   method: id,
   url: z.string(),
   resourceType: id,
@@ -84,6 +86,7 @@ export const network = z.object({
       "TELEMETRY",
       "STATIC_RESOURCE",
       "UNKNOWN",
+      "PAGE_INITIALIZATION",
     ])
     .default("UNKNOWN"),
   classification: evidence.optional(),
@@ -135,6 +138,22 @@ export const authSourceHintSchema = z.object({
   evidence: z.literal("EXACT_VALUE_MATCH"),
 });
 export type AuthSourceHint = z.infer<typeof authSourceHintSchema>;
+export const pageNavigationSchema = z.object({
+  id,
+  pageId: id.optional(),
+  url: z.string().url(),
+  startedAt: z.number(),
+  status: z.number().optional(),
+  contentType: z.string().optional(),
+  newWindow: z.boolean().default(false),
+});
+export const applicationCandidateSchema = z.object({
+  navigationId: id,
+  url: z.string().url(),
+  newWindow: z.boolean(),
+  requestIds: z.array(id),
+  enabled: z.boolean(),
+});
 export const recordingSchema = z.object({
   id,
   environmentRef: id.optional(),
@@ -143,6 +162,14 @@ export const recordingSchema = z.object({
   scenario: id,
   target: z.string().url(),
   notes: z.string().default(""),
+  referenceMaterial: z.string().max(24000).optional(),
+  pageNavigations: z.array(pageNavigationSchema).optional(),
+  phaseMarkers: z
+    .array(
+      z.object({ phase: z.enum(["BUSINESS", "RECOVERY"]), at: z.number() }),
+    )
+    .optional(),
+  applicationCandidates: z.array(applicationCandidateSchema).optional(),
   startedAt: z.number(),
   endedAt: z.number().optional(),
   state: z.enum(["RECORDING", "STOPPED"]),
@@ -220,6 +247,7 @@ export const caseSchema = z.object({
         expected: id,
         dependsOn: z.array(id),
         review: z.enum(["CONFIRMED", "NEEDS_REVIEW"]),
+        purpose: z.enum(["BUSINESS", "CLEANUP", "RESTORE"]).optional(),
       }),
     )
     .min(1),
@@ -287,6 +315,17 @@ export const planSchema = z.object({
   policyRef: id,
   authProfileRef: id,
   uiActions: z.array(action),
+  applicationInitializations: z
+    .array(
+      z.object({
+        navigationId: id,
+        url: z.string().url(),
+        newWindow: z.boolean(),
+        beforeStepId: id,
+        readySelector: z.string().optional(),
+      }),
+    )
+    .optional(),
   steps: z.array(stepSchema).min(1),
   parameters: z.record(z.string(), valueType).optional(),
   compilation: z
@@ -442,6 +481,15 @@ export interface StepResult {
   error?: string;
 }
 export interface Report {
+  applicationInitializations?: {
+    navigationId: string;
+    url: string;
+    beforeStepId: string;
+    status: "PASSED" | "FAILED";
+    startedAt: number;
+    endedAt: number;
+    error?: string;
+  }[];
   retrySession?: { reportId: string };
   retryOf?: { reportId: string; stepId: string; sessionReportId: string };
   debug?: { rawRequestHeaders: boolean; browserRetained?: boolean };
