@@ -879,6 +879,9 @@ function App() {
                   {analysis.recording.requests.filter((r) => !r.keep).length}{" "}
                   个。
                 </p>
+                <p>
+                  列表保留全部采集记录，只有勾选的请求会参与接口整理。初始化接口默认排除；有关联依赖或手动选择的请求仍会保留。
+                </p>
                 {!analysis.recording.requests.some((r) => r.keep) && (
                   <div className="message">
                     {analysis.recording.requests.length
@@ -891,7 +894,8 @@ function App() {
                     <h3>应用初始化候选</h3>
                     <p>
                       为保留接口匹配同一窗口中最近的 HTML
-                      主页面导航。勾选项将成为独立页面初始化步骤，不占用接口整理额度；请核对是否需要打开业务应用。
+                      主页面导航，录制起始页面由公共前置 UI
+                      负责，不重复展示。勾选项成为独立初始化步骤，不占用接口整理额度。
                     </p>
                     {analysis.recording.applicationCandidates.map(
                       (candidate) => (
@@ -911,7 +915,7 @@ function App() {
                               setAnalysis(next);
                             }}
                           />
-                          {candidate.newWindow ? "新窗口" : "当前页面"} ·{" "}
+                          {candidate.newWindow ? "新窗口" : "页面跳转"} ·{" "}
                           {candidate.url}
                         </label>
                       ),

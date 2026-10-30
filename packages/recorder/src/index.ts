@@ -1,4 +1,8 @@
-import { requestPhase, initializationCandidates } from "./recording-context.js";
+import {
+  requestPhase,
+  initializationCandidates,
+  usefulInitializationDependency,
+} from "./recording-context.js";
 import { AuthHintDiscovery } from "./auth-hints.js";
 import {
   recordingSchema,
@@ -547,7 +551,7 @@ export function analyze(
       reason: auth
         ? "UI authentication bootstrap; excluded from business plan"
         : req.category === "PAGE_INITIALIZATION"
-          ? "页面加载阶段请求：默认排除，可手动勾选业务查询或依赖接口"
+          ? "页面加载阶段请求：默认排除；明确的业务依赖或手动勾选可保留"
           : req.category === "UNKNOWN"
             ? "非标准接口路径：保留为待审核候选，不因缺少 /api/ 前缀而排除"
             : `Resource and path rule: ${req.category}`,
@@ -708,6 +712,7 @@ export function analyze(
         to?.keep &&
         from?.category === "PAGE_INITIALIZATION" &&
         !from.keep &&
+        usefulInitializationDependency(edge, from, to) &&
         filter.overrides?.[from.id] !== false
       ) {
         from.keep = true;

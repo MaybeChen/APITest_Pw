@@ -29,6 +29,18 @@ it("records DOM context under the actual tsx runtime across reloads, frames and 
     item.url.endsWith("/popup#/studio"),
   );
   expect(popupNavigation).toMatchObject({ status: 200, newWindow: true });
+  expect(result.modelRecording.applicationCandidates).toEqual([
+    expect.objectContaining({
+      navigationId: popupNavigation!.id,
+      newWindow: true,
+    }),
+  ]);
+  expect(
+    result.modelRecording.requests.some((request) =>
+      new URL(request.url).pathname.includes("popup-initial"),
+    ),
+  ).toBe(false);
+
   expect(
     result.recording.requests.find(
       (item) => new URL(item.url).pathname === "/api/popup",

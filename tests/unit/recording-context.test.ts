@@ -147,3 +147,58 @@ it("uses per-page interaction when phase markers are absent, and leaves legacy e
       ?.keep,
   ).toBe(true);
 });
+
+it("does not treat bootstrap calls in a newly opened page as business just because business recording started earlier", () => {
+  const recording = fixture();
+  recording.phaseMarkers = [
+    { phase: "BUSINESS", at: 40 },
+    { phase: "RECOVERY", at: 120 },
+  ];
+  recording.operations.push({
+    id: "create-click",
+    type: "click",
+    at: 90,
+    url: "https://example.test/studio",
+    context: { pageId: "popup" },
+    requestIds: [],
+  });
+  recording.requests[0].response = { data: [{ id: 2000, tenant_id: 2000 }] };
+  recording.requests[2].body = {
+    placeholder_key: "existing_key",
+    id: 2000,
+    tenant_id: 2000,
+  };
+  const result = analyze(recording);
+  expect(
+    result.recording.requests.find((item) => item.id === "menus"),
+  ).toMatchObject({ recordingPhase: "INITIALIZATION", keep: false });
+  expect(
+    result.recording.requests.find((item) => item.id === "lookup")?.keep,
+  ).toBe(true);
+  expect(
+    result.recording.requests.find((item) => item.id === "create")?.keep,
+  ).toBe(true);
+});
+
+it("omits the recording entry page but retains later same-window application navigation", () => {
+  const recording = fixture();
+  recording.requests = [
+    {
+      ...recording.requests[2],
+      id: "entry-call",
+      pageId: "main",
+      startedAt: 30,
+      keep: true,
+    },
+    {
+      ...recording.requests[2],
+      id: "later-call",
+      pageId: "main",
+      startedAt: 100,
+      keep: true,
+    },
+  ];
+  const candidates = initializationCandidates(recording);
+  expect(candidates.map((item) => item.navigationId)).toEqual(["other"]);
+  expect(candidates[0].newWindow).toBe(false);
+});

@@ -7,23 +7,27 @@ export function requestPhase(
   const marker = [...(recording.phaseMarkers ?? [])]
     .reverse()
     .find((item) => item.at <= request.startedAt);
-  if (marker) return marker.phase;
-  if (recording.phaseMarkers?.length) return "INITIALIZATION" as const;
-  if (!request.pageId) return undefined;
   const navigation = [...(recording.pageNavigations ?? [])]
     .filter(
       (item) =>
         item.pageId === request.pageId && item.startedAt <= request.startedAt,
     )
     .sort((a, b) => b.startedAt - a.startedAt)[0];
-  if (!navigation) return undefined;
   const interaction = recording.operations.some(
     (operation) =>
       operation.context.pageId === request.pageId &&
-      operation.at >= navigation.startedAt &&
+      operation.at >= (navigation?.startedAt ?? Infinity) &&
       operation.at <= request.startedAt &&
       ["click", "input", "change", "submit"].includes(operation.type),
   );
+  if (marker) {
+    // A global business marker does not make a newly opened page's bootstrap calls business calls.
+    if (navigation && navigation.startedAt > marker.at && !interaction)
+      return "INITIALIZATION" as const;
+    return marker.phase;
+  }
+  if (recording.phaseMarkers?.length) return "INITIALIZATION" as const;
+  if (!request.pageId || !navigation) return undefined;
   return interaction ? ("BUSINESS" as const) : ("INITIALIZATION" as const);
 }
 
@@ -55,6 +59,16 @@ export function initializationCandidates(
       )
       .sort((a, b) => b.startedAt - a.startedAt)[0];
     if (!navigation) continue;
+    const entry = new URL(recording.target);
+    const target = new URL(navigation.url);
+    // The recording entry page belongs to the shared prerequisite UI, not application initialization.
+    if (
+      !navigation.newWindow &&
+      entry.origin === target.origin &&
+      entry.pathname === target.pathname &&
+      entry.search === target.search
+    )
+      continue;
     const previous = recording.applicationCandidates?.find(
       (item) => item.navigationId === navigation.id,
     );
@@ -71,4 +85,45 @@ export function initializationCandidates(
     candidates.set(navigation.id, candidate);
   }
   return [...candidates.values()];
+}
+
+export function usefulInitializationDependency(
+  edge: Recording["dependencies"][number],
+  from: Recording["requests"][number],
+  to: Recording["requests"][number],
+) {
+  const normalize = (value: string) =>
+    value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const source = normalize(edge.path.match(/\.([^.[\]]+)$/)?.[1] ?? "");
+  const target = normalize(
+    edge.targetKey?.match(/(?:^|\.)([^.[\]]+)$/)?.[1] ?? "",
+  );
+  if (/^(?:tenantid|locale|sessionid|userid|ownerid)$/.test(source))
+    return false;
+  if (!["id", "name", "key", ""].includes(source) && source === target)
+    return true;
+  const resource = (url: string) =>
+    new URL(url).pathname
+      .split("/")
+      .filter(
+        (segment) =>
+          segment &&
+          !/^\d+$/.test(segment) &&
+          !/^(?:api|web|rest|v\d+|list|query|search|detail|info|save|create|update|delete|get|page)$/i.test(
+            segment,
+          ),
+      )
+      .at(-1)
+      ?.toLowerCase()
+      .replace(/s$/, "") ?? "";
+  const left = resource(from.url),
+    right = resource(to.url);
+  if (left && edge.targetLocation === "PATH" && edge.targetKey) {
+    const parent = new URL(to.url).pathname.split("/").filter(Boolean)[
+      Number(edge.targetKey) - 1
+    ];
+    if (parent && normalize(parent).replace(/s$/, "") === normalize(left))
+      return true;
+  }
+  return !!left && left === right;
 }
